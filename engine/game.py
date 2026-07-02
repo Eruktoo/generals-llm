@@ -66,11 +66,44 @@ class Game:
             self.turn += 1
 
     def execute_moves(self, moves_dict: dict[int, list[Move]]) -> None:
+        # Flatten all moves with priority info for proper ordering
+        flat_moves: list[tuple[int, int, Move]] = []  # (priority, army_size, move)
         for player_idx in sorted(moves_dict):
             if not self._is_alive(player_idx):
                 continue
             for move in moves_dict[player_idx]:
-                self._execute_move(player_idx, move)
+                if not self._valid_move(player_idx, move):
+                    continue
+                source = self.board.tiles[move.from_y][move.from_x]
+                army_size = source.army // 2 if move.take_half else source.army - 1
+                # Priority: chase(0) < defensive(1) < normal(2) < attack_general(3)
+                priority = self._move_priority(player_idx, move)
+                flat_moves.append((priority, -army_size, player_idx, move))
+
+        # Sort: higher priority first, then larger army first
+        flat_moves.sort(key=lambda x: (-x[0], x[1], x[2]))
+
+        for _, _, player_idx, move in flat_moves:
+            if not self._is_alive(player_idx):
+                continue
+            self._execute_move(player_idx, move)
+
+    def _move_priority(self, player_idx: int, move: Move) -> int:
+        """Higher number = higher priority."""
+        target = self.board.tiles[move.to_y][move.to_x]
+        # Attack on enemy general: lowest priority (0)
+        if target.type == TileType.GENERAL and target.occupier != player_idx and target.occupier is not None:
+            return 0
+        # Normal attack: medium priority (1)
+        if target.occupier != player_idx and target.occupier is not None and target.occupier >= 0:
+            return 1
+        # Defensive (friendly merge): high priority (2)
+        if target.occupier == player_idx:
+            return 2
+        # Expand to neutral: also high priority (2)
+        if target.occupier is None or target.occupier < 0:
+            return 2
+        return 1
 
     def get_player_view(self, player_idx: int) -> dict:
         visible_board = self.board.get_visible(player_idx)

@@ -4,6 +4,10 @@ import json
 import os
 import random
 import sys
+import threading
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,12 +39,26 @@ class GameService:
         self.running = True
         self.round_index = 0
         self.seed: int | None = None
+        self._lock = threading.Lock()
+        self._stop = False
+        self._rounds: list[dict[str, Any]] = []
+        self._current_round = -1
+        self._thread: threading.Thread | None = None
+        self._compute_error: str | None = None
         self.game: Game
         self.agents: list[LLMAgent]
         self.logs: list[dict[str, Any]] = []
-        self.reset()
+        self._initial_state: dict[str, Any] = {}
+        with self._lock:
+            self._new_game_locked()
+        self._start_thread()
 
-    def reset(self) -> dict[str, Any]:
+    def _new_game_locked(self) -> None:
+        self._stop = False
+        self._rounds = []
+        self._current_round = -1
+        self._compute_error = None
+        self.round_index = 0
         self.seed = random.randrange(1_000_000_000)
         board = Board.generate_map(WIDTH, HEIGHT, NUM_PLAYERS, seed=self.seed)
         players = [
@@ -56,7 +74,6 @@ class GameService:
             LLMAgent(player_idx=i, personality=personality)
             for i, personality in enumerate(PLAYER_PERSONALITIES)
         ]
-        self.round_index = 0
         self.logs = [{
             "round": 0,
             "turn": 0,
@@ -64,47 +81,129 @@ class GameService:
             "player": None,
             "message": "新地图已生成，4 名指挥官进入战场。",
         }]
-        return self.state()
+        self._initial_state = self._state_snapshot()
 
-    def step_round(self, half_turns: int = HALF_TURNS_PER_ROUND) -> dict[str, Any]:
+    def _start_thread(self) -> None:
+        self._thread = threading.Thread(target=self._compute_all, daemon=True)
+        self._thread.start()
+
+    def reset(self) -> dict[str, Any]:
+        with self._lock:
+            self._stop = True
+            thread = self._thread
+        if thread and thread.is_alive():
+            thread.join()
+        with self._lock:
+            self._new_game_locked()
+        self._start_thread()
+        return self.current_state()
+
+    def _compute_all(self) -> None:
+        try:
+            while True:
+                with self._lock:
+                    if self._stop or self.game.is_finished():
+                        return
+                round_data = self._compute_one_round()
+                with self._lock:
+                    if self._stop:
+                        return
+                    self._rounds.append(round_data)
+                time.sleep(0.05)
+        except Exception as exc:
+            traceback.print_exc()
+            with self._lock:
+                self._compute_error = repr(exc)
+                self._append_log(None, f"后台计算异常: {exc!r}")
+
+    def _compute_one_round(self) -> dict[str, Any]:
         if self.game.is_finished():
             self._append_log(None, "战局已结束，无法继续推进。")
-            return self.state()
+            return {
+                "round": self.round_index,
+                "frames": [self._state_snapshot()],
+                "logs": [],
+                "finished": True,
+                "winner": self._winner(),
+            }
 
         self.round_index += 1
-        for _ in range(max(1, half_turns)):
-            if self.game.is_finished():
-                break
+        log_start = len(self.logs)
+        moves_by_player: dict[int, list[Move]] = {}
 
-            moves_by_player: dict[int, list[Move]] = {}
-            for agent in self.agents:
-                player_idx = agent.player_idx
-                if not self.game.alive[player_idx]:
-                    continue
+        # Parallel agent decisions
+        alive_agents = [(a, self.game.get_player_view(a.player_idx)) for a in self.agents if self.game.alive[a.player_idx]]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {}
+            for agent, view in alive_agents:
+                future = pool.submit(agent.decide, view)
+                futures[future] = (agent, view)
 
-                view = self.game.get_player_view(player_idx)
-                strategy = agent.decide(view)
+            for future in as_completed(futures):
+                agent, view = futures[future]
+                try:
+                    strategy = future.result()
+                except Exception:
+                    strategy = agent.simulate_llm(view)
                 executor = Executor(
-                    player_idx,
+                    agent.player_idx,
                     view["board"],
                     strategy.get("constraints") or {},
                 )
                 moves = executor.execute(strategy)
-                moves_by_player[player_idx] = moves
-                self._append_strategy_log(player_idx, strategy, moves)
+                moves_by_player[agent.player_idx] = moves
+                self._append_strategy_log(agent.player_idx, strategy, moves)
+
+        frames = [self._state_snapshot()]
+        for _ in range(max(1, HALF_TURNS_PER_ROUND)):
+            if self.game.is_finished():
+                break
 
             self.game.step(moves_by_player)
 
-        if self.game.is_finished():
-            winner = self._winner()
-            if winner is not None:
-                self._append_log(winner, f"{self._player_label(winner)} 获胜。")
+            if self.game.is_finished():
+                winner = self._winner()
+                if winner is not None:
+                    self._append_log(winner, f"{self._player_label(winner)} 获胜。")
+                else:
+                    self._append_log(None, "战局结束，无幸存者。")
+
+            frames.append(self._state_snapshot())
+
+        return {
+            "round": self.round_index,
+            "frames": frames,
+            "logs": self.logs[log_start:],
+            "finished": self.game.is_finished(),
+            "winner": self._winner() if self.game.is_finished() else None,
+        }
+
+    def advance(self) -> dict[str, Any]:
+        with self._lock:
+            next_round = self._current_round + 1
+            if next_round < len(self._rounds):
+                self._current_round = next_round
+                return {"ready": True, **self._rounds[next_round]}
+            if self._rounds:
+                finished = bool(self._rounds[-1]["finished"])
+                winner = self._rounds[-1]["winner"]
             else:
-                self._append_log(None, "战局结束，无幸存者。")
+                finished = bool(self._initial_state["finished"])
+                winner = self._initial_state["winner"]
+            return {
+                "ready": False,
+                "finished": finished,
+                "winner": winner,
+                "error": self._compute_error,
+            }
 
-        return self.state()
+    def current_state(self) -> dict[str, Any]:
+        with self._lock:
+            if 0 <= self._current_round < len(self._rounds):
+                return self._rounds[self._current_round]["frames"][-1]
+            return self._initial_state
 
-    def state(self) -> dict[str, Any]:
+    def _state_snapshot(self) -> dict[str, Any]:
         rankings = []
         for ranking in self.game.get_rankings():
             player_idx = int(ranking["player"])
@@ -127,17 +226,27 @@ class GameService:
             "finished": self.game.is_finished(),
             "winner": winner,
             "logs": self.logs[-80:],
-            "seed": self.seed,
         }
 
     def status(self) -> dict[str, Any]:
-        return {
-            "running": self.running,
-            "turn": self.game.turn,
-            "phase": self.game.phase,
-            "finished": self.game.is_finished(),
-            "players": NUM_PLAYERS,
-        }
+        with self._lock:
+            if self._rounds:
+                state = self._rounds[-1]["frames"][-1]
+                finished = bool(self._rounds[-1]["finished"])
+            else:
+                state = self._initial_state
+                finished = bool(state["finished"])
+            return {
+                "running": self.running,
+                "turn": state["turn"],
+                "phase": state["phase"],
+                "finished": finished,
+                "players": NUM_PLAYERS,
+                "computed_rounds": len(self._rounds),
+                "current_round": self._current_round,
+                "ready": self._current_round + 1 < len(self._rounds),
+                "error": self._compute_error,
+            }
 
     def _serialize_tiles(self, tiles: list[list[Tile]]) -> list[list[dict[str, Any]]]:
         return [
@@ -213,7 +322,7 @@ class GeneralsHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/state":
-            self._send_json(SERVICE.state())
+            self._send_json(SERVICE.current_state())
             return
         if path == "/api/status":
             self._send_json(SERVICE.status())
@@ -224,27 +333,19 @@ class GeneralsHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path == "/api/step":
-            self._send_json(SERVICE.step_round(self._requested_half_turns()))
+        if path == "/api/advance":
+            payload = SERVICE.advance()
+            for _ in range(30):
+                if payload.get("ready") or payload.get("finished") or payload.get("error"):
+                    break
+                time.sleep(0.1)
+                payload = SERVICE.advance()
+            self._send_json(payload)
             return
         if path == "/api/reset":
             self._send_json(SERVICE.reset())
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
-
-    def _requested_half_turns(self) -> int:
-        content_length = int(self.headers.get("Content-Length") or 0)
-        if content_length <= 0:
-            return HALF_TURNS_PER_ROUND
-        raw_body = self.rfile.read(content_length)
-        try:
-            body = json.loads(raw_body.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return HALF_TURNS_PER_ROUND
-        try:
-            return max(1, min(50, int(body.get("half_turns", HALF_TURNS_PER_ROUND))))
-        except (TypeError, ValueError):
-            return HALF_TURNS_PER_ROUND
 
     def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

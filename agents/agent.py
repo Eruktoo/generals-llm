@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from typing import Any
 
 from engine.board import TILE_FOG, TILE_FOG_OBSTACLE, Board
 from engine.types import Tile, TileType
+
+
+DEFAULT_CONSTRAINTS = {
+    "min_general_garrison": 20,
+    "min_city_garrison": 5,
+    "max_commitment_percent": 50,
+    "avoid_fog": False,
+}
 
 
 AGENT_CONFIGS = {
@@ -67,6 +76,9 @@ VALID_COMMITMENTS = {"limited", "full"}
 
 
 class LLMAgent:
+    DEEPSEEK_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
+    DEEPSEEK_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
+
     def __init__(self, player_idx: int, personality: str):
         if personality not in AGENT_CONFIGS:
             valid = ", ".join(sorted(AGENT_CONFIGS))
@@ -130,6 +142,7 @@ class LLMAgent:
             "    ],",
             '    "constraints": {',
             '        "min_general_garrison": 20,',
+            '        "min_city_garrison": 5,',
             '        "avoid_fog": false',
             "    }",
             "}",
@@ -142,14 +155,53 @@ class LLMAgent:
         prompt = self.format_prompt(game_view)
         self._last_game_view = game_view
 
-        simulated_response = self.simulate_llm(game_view)
-        response_text = json.dumps(simulated_response, ensure_ascii=False)
+        response_text = self._call_deepseek_api(prompt)
         strategy = self.parse_response(response_text)
         if strategy is None:
             strategy = self.simulate_llm(game_view)
 
         self.history.append((prompt, response_text, strategy))
         return strategy
+
+    def _call_deepseek_api(self, prompt: str) -> str:
+        import urllib.request
+
+        key_path = os.path.expanduser("~/.hermes/credentials/deepseek.txt")
+        try:
+            with open(key_path) as f:
+                api_key = f.read().strip()
+        except (FileNotFoundError, IOError):
+            return ""
+
+        payload = json.dumps(
+            {
+                "model": self.DEEPSEEK_MODEL,
+                "messages": [
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.8,
+                "max_tokens": 1500,
+                "stream": False,
+            }
+        ).encode("utf-8")
+
+        req = urllib.request.Request(
+            self.DEEPSEEK_API_URL,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                return result["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"[DeepSeek API error] {e}")
+            return ""
 
     def simulate_llm(self, game_view: dict) -> dict:
         board = self._require_board(game_view)
@@ -159,6 +211,7 @@ class LLMAgent:
 
         stance = self._choose_stance(stats, rankings, analysis)
         constraints = {
+            **DEFAULT_CONSTRAINTS,
             **self.config["default_constraints"],
             "avoid_fog": stance == "defensive",
         }
@@ -477,11 +530,12 @@ class LLMAgent:
         return validated
 
     def _validate_constraints(self, constraints: Any) -> dict:
-        merged = {**self.config["default_constraints"]}
+        merged = {**DEFAULT_CONSTRAINTS, **self.config["default_constraints"]}
         if isinstance(constraints, dict):
             merged.update(constraints)
         return {
             "min_general_garrison": max(0, int(merged.get("min_general_garrison", 0))),
+            "min_city_garrison": max(0, int(merged.get("min_city_garrison", 0))),
             "max_commitment_percent": self._clamp_int(merged.get("max_commitment_percent", 50), 1, 100),
             "avoid_fog": bool(merged.get("avoid_fog", False)),
         }
