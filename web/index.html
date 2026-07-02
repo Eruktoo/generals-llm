@@ -29,14 +29,15 @@
     body {
       margin: 0;
       height: 100%;
-      overflow: hidden;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overflow-anchor: none;
       background:
         radial-gradient(circle at 18% 12%, rgba(74, 144, 217, 0.18), transparent 28%),
         radial-gradient(circle at 82% 10%, rgba(243, 156, 18, 0.14), transparent 26%),
         var(--bg);
       color: var(--text);
       font-family: Inter, "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
-      overflow-x: hidden;
     }
 
     .app {
@@ -316,9 +317,11 @@
     <header>
       <h1>⚔️ Generals LLM</h1>
       <div class="turn">
-        <span>当前回合</span>
+        <span>回合</span>
         <strong id="turnNumber">0</strong>
-        <span id="phaseText">阶段 0</span>
+        <span id="phaseText">· 阶段 0</span>
+        <span id="cacheInfo" style="margin-left:12px;font-size:13px;color:var(--muted);"></span>
+        <span id="gameId" style="margin-left:12px;font-size:12px;color:var(--muted);font-family:monospace;"></span>
       </div>
     </header>
 
@@ -342,37 +345,45 @@
 
     <footer class="controls">
       <div class="control-group">
-        <button id="playBtn">⏸ 暂停</button>
+        <button id="prevBtn" class="secondary">◀</button>
+        <input id="roundInput" type="number" min="0" value="0" style="width:60px;text-align:center;">
+        <button id="goBtn" class="secondary">跳转</button>
+        <button id="nextBtn">下一轮 ▶</button>
         <button id="resetBtn" class="secondary">重置</button>
       </div>
-      <div id="message" class="message">正在连接服务器...</div>
+      <div id="message" class="message">已就绪</div>
     </footer>
   </div>
 
   <script>
     const canvas = document.getElementById("board");
     const ctx = canvas.getContext("2d");
+    const gameId = document.getElementById("gameId");
     const turnNumber = document.getElementById("turnNumber");
     const phaseText = document.getElementById("phaseText");
+    const cacheInfo = document.getElementById("cacheInfo");
+
+    const colors = ["#4A90D9", "#E74C3C", "#2ECC71", "#F39C12"];
     const rankingsEl = document.getElementById("rankings");
     const logEl = document.getElementById("log");
     const messageEl = document.getElementById("message");
-    const playBtn = document.getElementById("playBtn");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const goBtn = document.getElementById("goBtn");
+    const roundInput = document.getElementById("roundInput");
     const resetBtn = document.getElementById("resetBtn");
 
-    const colors = ["#4A90D9", "#E74C3C", "#2ECC71", "#F39C12"];
     const neutralPlain = "#173f2a";
     const gridLine = "rgba(255,255,255,0.16)";
     const state = {
       data: null,
       displayOwners: [],
       busy: false,
-      autoPlaying: true,
-      loopRunning: false,
-      pendingLoop: false,
-      runId: 0,
       canvasSize: 0
     };
+    let currentRound = -1;
+    let totalRounds = 0;
+    let isBusy = false;
 
     function colorForPlayer(player) {
       return colors[player] || "#9aa4b2";
@@ -556,46 +567,29 @@
     function render(data) {
       state.data = data;
       turnNumber.textContent = data.turn;
-      phaseText.textContent = `阶段 ${data.phase}`;
+      phaseText.textContent = `· 阶段 ${data.phase}`;
+      if (data.seed) gameId.textContent = `#${data.seed.toString().slice(-6)}`;
       renderRankings(data.rankings || []);
       renderLog(data.logs || []);
       const winnerText = data.winner === null || data.winner === undefined ? "" : `，胜者 P${data.winner}`;
       messageEl.textContent = data.finished ? `战局结束${winnerText}` : "服务器已连接";
-      updatePlayButton();
-    }
-
-    function updatePlayButton() {
-      if (state.data && state.data.finished) {
-        playBtn.textContent = "重新开始";
-        return;
-      }
-      playBtn.textContent = state.autoPlaying ? "⏸ 暂停" : "▶ 继续";
     }
 
     function sleep(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
-    async function playReplay(frames, logs, finished, winner, runId) {
+    async function playReplay(frames, logs, finished, winner) {
       frames = Array.isArray(frames) ? frames : [];
-      for (let index = 0; index < frames.length; index += 1) {
-        if (runId !== state.runId) return;
+      for (let index = 0; index < frames.length; index++) {
         render({
           ...frames[index],
           logs,
           finished: Boolean(finished && index === frames.length - 1),
           winner: index === frames.length - 1 ? winner : frames[index].winner
         });
-        messageEl.textContent = `回放中 ${index + 1}/${frames.length}...`;
-        await sleep(400);
-      }
-      if (frames.length && runId === state.runId) {
-        render({
-          ...frames[frames.length - 1],
-          logs,
-          finished: Boolean(finished),
-          winner
-        });
+        messageEl.textContent = `步 ${index + 1}/${frames.length}`;
+        if (index < frames.length - 1) await sleep(200);
       }
     }
 
@@ -616,112 +610,122 @@
       }
     }
 
-    async function autoPlayLoop() {
-      if (state.loopRunning) {
-        state.pendingLoop = true;
-        return;
+    async function updateCacheInfo() {
+      try {
+        const data = await requestJson("/api/rounds");
+        totalRounds = data.computed;
+        cacheInfo.textContent = `缓存 ${data.current + 1}/${data.computed}`;
+        roundInput.max = Math.max(0, data.computed);
+        return data;
+      } catch (error) {
+        return null;
       }
-      state.loopRunning = true;
-      state.pendingLoop = false;
-      const runId = state.runId;
-      updatePlayButton();
-      while (state.autoPlaying && runId === state.runId) {
-        state.busy = true;
-        messageEl.textContent = "正在推演下一轮...";
-        try {
-          const data = await requestJson("/api/advance", { method: "POST" });
-          if (runId !== state.runId) break;
-          if (data.ready) {
-            await playReplay(data.frames, data.logs, data.finished, data.winner, runId);
-            if (runId !== state.runId) break;
-            if ((!data.frames || !data.frames.length) && state.data) {
-              render({
-                ...state.data,
-                logs: data.logs || state.data.logs,
-                finished: Boolean(data.finished),
-                winner: data.winner
-              });
-            }
-            if (data.finished) {
-              state.autoPlaying = false;
-              updatePlayButton();
-              break;
-            }
-          } else if (data.finished) {
-            state.autoPlaying = false;
-            if (state.data) {
-              render({
-                ...state.data,
-                logs: data.logs || state.data.logs,
-                finished: true,
-                winner: data.winner
-              });
-            }
-            updatePlayButton();
-            break;
-          } else {
-            messageEl.textContent = "等待服务器准备下一轮...";
-            await sleep(500);
-          }
-        } catch (error) {
-          if (runId === state.runId) {
-            messageEl.textContent = `推演失败：${error.message}`;
-            state.autoPlaying = false;
-            updatePlayButton();
-          }
-          break;
+    }
+
+    async function nextRound() {
+      if (isBusy) return;
+      isBusy = true;
+      nextBtn.disabled = true;
+      let data = null;
+      try {
+        // Retry until ready
+        for (let attempt = 0; attempt < 60; attempt++) {
+          data = await requestJson("/api/advance", { method: "POST" });
+          if (data.ready || data.finished) break;
+          messageEl.textContent = `计算中... 第${attempt+1}s`;
+          await sleep(1000);
         }
+        if (data && data.ready) {
+          await playReplay(data.frames, data.logs, data.finished, data.winner);
+          currentRound = data.round;
+          roundInput.value = currentRound;
+          messageEl.textContent = `回合 ${currentRound} — 已就绪`;
+        }
+        if (data && data.finished) {
+          nextBtn.disabled = true;
+          messageEl.textContent = `战局结束${data.winner !== null && data.winner !== undefined ? "，胜者 P" + data.winner : ""}`;
+        }
+      } catch (error) {
+        messageEl.textContent = `错误: ${error.message}`;
       }
-      if (runId === state.runId) {
-        state.busy = false;
-        updatePlayButton();
+      isBusy = false;
+      if (!data || !data.finished) nextBtn.disabled = false;
+      updateCacheInfo();
+    }
+
+    async function goToRound() {
+      if (isBusy) return;
+      const targetRound = parseInt(roundInput.value, 10);
+      if (Number.isNaN(targetRound) || targetRound < 0) return;
+      isBusy = true;
+      nextBtn.disabled = true;
+      let data = null;
+      try {
+        const target = Math.max(0, targetRound - 1);
+        data = await requestJson("/api/advance", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({target})
+        });
+        if (data.ready) {
+          await playReplay(data.frames, data.logs, data.finished, data.winner);
+          currentRound = data.round;
+          roundInput.value = currentRound;
+        } else if (!data.finished) {
+          messageEl.textContent = "目标回合尚未缓存";
+        }
+      } catch (error) {
+        messageEl.textContent = `错误: ${error.message}`;
       }
-      state.loopRunning = false;
-      if (state.pendingLoop && state.autoPlaying) {
-        autoPlayLoop();
+      isBusy = false;
+      if (!data || !data.finished) nextBtn.disabled = false;
+      updateCacheInfo();
+    }
+
+    async function prevRound() {
+      const cur = parseInt(roundInput.value, 10) || 0;
+      if (cur > 1) {
+        roundInput.value = cur - 1;
+        await goToRound();
       }
     }
 
     async function resetGame() {
-      state.autoPlaying = false;
-      state.runId += 1;
-      updatePlayButton();
       state.busy = true;
+      isBusy = true;
+      nextBtn.disabled = true;
       messageEl.textContent = "正在重置战场...";
       try {
         const data = await requestJson("/api/reset", { method: "POST" });
         state.displayOwners = [];
+        currentRound = -1;
+        totalRounds = 0;
+        roundInput.value = 0;
         render(data);
-        state.autoPlaying = !data.finished;
-        state.runId += 1;
-        updatePlayButton();
-        if (state.autoPlaying) autoPlayLoop();
+        await updateCacheInfo();
       } catch (error) {
         messageEl.textContent = `重置失败：${error.message}`;
       } finally {
         state.busy = false;
+        isBusy = false;
+        nextBtn.disabled = Boolean(state.data && state.data.finished);
       }
     }
 
-    playBtn.addEventListener("click", () => {
-      if (state.data && state.data.finished) {
-        resetGame();
-        return;
-      }
-      state.autoPlaying = !state.autoPlaying;
-      updatePlayButton();
-      if (state.autoPlaying) {
-        autoPlayLoop();
-      }
+    nextBtn.addEventListener("click", nextRound);
+    prevBtn.addEventListener("click", prevRound);
+    goBtn.addEventListener("click", goToRound);
+    roundInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") goToRound();
     });
     resetBtn.addEventListener("click", resetGame);
     window.addEventListener("resize", resizeCanvas);
 
+    setInterval(updateCacheInfo, 2000);
     loadState().then(() => {
+      updateCacheInfo();
       if (state.data && !state.data.finished) {
-        state.autoPlaying = true;
-        updatePlayButton();
-        autoPlayLoop();
+        nextBtn.disabled = false;
       }
     });
     requestAnimationFrame(drawBoard);

@@ -305,6 +305,21 @@ class Executor:
             if not self._respects_source_constraints(source, moving_army, constraints):
                 continue
             return move
+
+        # Fallback: constraints too strict, retry with minimal garrisons
+        relaxed = {**constraints, "min_general_garrison": 1, "min_city_garrison": 1}
+        for half in possible:
+            if half is None:
+                continue
+            move = Move(from_x, from_y, to_x, to_y, half)
+            if not self._validator._valid_move(self.player_idx, move):
+                continue
+            moving_army = self._moving_army(source.army, half)
+            if moving_army <= 0:
+                continue
+            if not self._respects_source_constraints(source, moving_army, relaxed):
+                continue
+            return move
         return None
 
     def _respects_source_constraints(self, source: Tile, moving_army: int, constraints: dict) -> bool:

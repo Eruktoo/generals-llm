@@ -178,8 +178,14 @@ class GameService:
             "winner": self._winner() if self.game.is_finished() else None,
         }
 
-    def advance(self) -> dict[str, Any]:
+    def advance(self, target: int | None = None) -> dict[str, Any]:
         with self._lock:
+            if target is not None:
+                if self._rounds:
+                    target = max(0, min(target, len(self._rounds) - 1))
+                else:
+                    target = max(0, target)
+                self._current_round = target - 1
             next_round = self._current_round + 1
             if next_round < len(self._rounds):
                 self._current_round = next_round
@@ -195,6 +201,19 @@ class GameService:
                 "finished": finished,
                 "winner": winner,
                 "error": self._compute_error,
+            }
+
+    def rounds(self) -> dict[str, Any]:
+        with self._lock:
+            if self._rounds:
+                finished = bool(self._rounds[-1]["finished"])
+            else:
+                finished = bool(self._initial_state["finished"])
+            return {
+                "rounds": list(range(len(self._rounds))),
+                "current": self._current_round,
+                "computed": len(self._rounds),
+                "finished": finished,
             }
 
     def current_state(self) -> dict[str, Any]:
@@ -226,6 +245,7 @@ class GameService:
             "finished": self.game.is_finished(),
             "winner": winner,
             "logs": self.logs[-80:],
+            "seed": self.seed,
         }
 
     def status(self) -> dict[str, Any]:
@@ -269,6 +289,12 @@ class GameService:
 
     def _append_strategy_log(self, player_idx: int, strategy: dict[str, Any], moves: list[Move]) -> None:
         plan = str(strategy.get("round_plan") or "执行默认行动。")
+        reasoning = str(strategy.get("reasoning") or "")
+        stance = str(strategy.get("stance", "?"))
+        n_obj = len(strategy.get("objectives") or [])
+        n_dir = len(strategy.get("direct_orders") or [])
+        cons = strategy.get("constraints") or {}
+        garrison = cons.get("min_general_garrison", "?")
         if moves:
             move_text = "，".join(
                 f"({move.from_y},{move.from_x})->({move.to_y},{move.to_x})"
@@ -276,9 +302,13 @@ class GameService:
             )
             if len(moves) > 3:
                 move_text += f" 等 {len(moves)} 步"
+            total_army = sum(abs(m.from_x - m.to_x) + abs(m.from_y - m.to_y) + 1 for m in moves[:3])
         else:
-            move_text = "无可执行移动"
-        self._append_log(player_idx, f"{plan} / {move_text}")
+            move_text = "\u7a7a"
+        label = f"{plan}"
+        if reasoning and reasoning not in plan:
+            label += f" | {reasoning[:120]}"
+        self._append_log(player_idx, f"[{stance}] {label} / {len(moves)}\u52a8 {n_obj}\u76ee\u6807 {n_dir}\u76f4\u4ee4 g{garrison} / {move_text}")
 
     def _append_log(self, player_idx: int | None, message: str) -> None:
         self.logs.append({
@@ -327,6 +357,9 @@ class GeneralsHandler(SimpleHTTPRequestHandler):
         if path == "/api/status":
             self._send_json(SERVICE.status())
             return
+        if path == "/api/rounds":
+            self._send_json(SERVICE.rounds())
+            return
         if path in ("", "/"):
             self.path = "/index.html"
         super().do_GET()
@@ -334,12 +367,13 @@ class GeneralsHandler(SimpleHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/advance":
-            payload = SERVICE.advance()
+            target = self._read_target()
+            payload = SERVICE.advance(target)
             for _ in range(30):
                 if payload.get("ready") or payload.get("finished") or payload.get("error"):
                     break
                 time.sleep(0.1)
-                payload = SERVICE.advance()
+                payload = SERVICE.advance(target)
             self._send_json(payload)
             return
         if path == "/api/reset":
@@ -354,6 +388,19 @@ class GeneralsHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _read_target(self) -> int | None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return None
+        try:
+            body = self.rfile.read(length).decode("utf-8")
+            data = json.loads(body) if body else {}
+            if "target" not in data or data["target"] is None:
+                return None
+            return int(data["target"])
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
 
 
 def main() -> None:

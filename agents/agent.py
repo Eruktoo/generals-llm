@@ -76,8 +76,8 @@ VALID_COMMITMENTS = {"limited", "full"}
 
 
 class LLMAgent:
-    DEEPSEEK_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
-    DEEPSEEK_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
+    DEEPSEEK_MODEL = "deepseek-chat"
+    DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
     def __init__(self, player_idx: int, personality: str):
         if personality not in AGENT_CONFIGS:
@@ -131,6 +131,7 @@ class LLMAgent:
             "{",
             '    "stance": "aggressive|defensive|balanced",',
             '    "round_plan": "一句话说明你的战术意图",',
+            '    "reasoning": "详细分析当前局势并解释你为什么做出这个决策（100字以内）",',
             '    "objectives": [',
             '        {"type": "expand_region", "region": {"x1": 0, "y1": 0, "x2": 5, "y2": 5}, "priority": 0.7},',
             '        {"type": "attack_position", "target": {"x": 8, "y": 4}, "priority": 0.9, "commitment": "limited"},',
@@ -180,7 +181,7 @@ class LLMAgent:
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.8,
-                "max_tokens": 1500,
+                "max_tokens": 1800,
                 "stream": False,
             }
         ).encode("utf-8")
@@ -483,6 +484,7 @@ class LLMAgent:
         return {
             "stance": stance,
             "round_plan": str(strategy.get("round_plan") or "根据当前视野执行稳健行动。"),
+            "reasoning": str(strategy.get("reasoning") or ""),
             "objectives": objectives,
             "direct_orders": self._validate_direct_orders(strategy.get("direct_orders"), board),
             "constraints": self._validate_constraints(strategy.get("constraints")),
