@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Generals LLM</title>
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --panel: rgba(255, 255, 255, 0.08);
+      --panel-strong: rgba(255, 255, 255, 0.13);
+      --line: rgba(255, 255, 255, 0.18);
+      --text: #f5f7fb;
+      --muted: #9ca9bd;
+      --accent: #ffd166;
+      --p0: #4A90D9;
+      --p1: #E74C3C;
+      --p2: #2ECC71;
+      --p3: #F39C12;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 18% 12%, rgba(74, 144, 217, 0.18), transparent 28%),
+        radial-gradient(circle at 82% 10%, rgba(243, 156, 18, 0.14), transparent 26%),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      overflow-x: hidden;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 16px;
+      padding: 18px;
+    }
+
+    header,
+    .controls,
+    .card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+    }
+
+    header {
+      min-height: 68px;
+      border-radius: 8px;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(24px, 4vw, 34px);
+      line-height: 1;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .turn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 15px;
+      white-space: nowrap;
+    }
+
+    .turn strong {
+      color: var(--text);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 22px;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(300px, 1fr) 320px;
+      gap: 16px;
+      align-items: stretch;
+      min-height: 0;
+    }
+
+    .board-wrap {
+      min-width: 0;
+      display: grid;
+      place-items: center;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.18);
+    }
+
+    canvas {
+      width: min(100%, 540px);
+      aspect-ratio: 1 / 1;
+      display: block;
+      border-radius: 8px;
+      background: #102317;
+      box-shadow: 0 22px 60px rgba(0, 0, 0, 0.38);
+    }
+
+    aside {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 16px;
+    }
+
+    .card {
+      border-radius: 8px;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+      color: #d9e2ef;
+      letter-spacing: 0;
+    }
+
+    .rank-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .rank-row {
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+    }
+
+    .badge {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 13px;
+      color: white;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    .player-name {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .player-meta,
+    .status {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    .status.alive {
+      color: #7ee0a1;
+    }
+
+    .status.dead {
+      color: #ef7f75;
+    }
+
+    .log {
+      min-height: 180px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 8px;
+      padding-right: 4px;
+    }
+
+    .log-item {
+      padding: 9px 10px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.18);
+      color: #cfd8e6;
+      font-size: 13px;
+      line-height: 1.45;
+      border-left: 3px solid rgba(255, 255, 255, 0.24);
+    }
+
+    .log-item b {
+      color: white;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    .controls {
+      min-height: 68px;
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      min-height: 44px;
+      padding: 0 20px;
+      background: linear-gradient(135deg, #f0b429, #f39c12);
+      color: #1c1300;
+      font-weight: 800;
+      font-size: 16px;
+      cursor: pointer;
+      box-shadow: 0 10px 30px rgba(243, 156, 18, 0.22);
+    }
+
+    button:hover {
+      filter: brightness(1.06);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.62;
+    }
+
+    .secondary {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--text);
+      box-shadow: none;
+      border: 1px solid var(--line);
+    }
+
+    .message {
+      color: var(--muted);
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 900px) {
+      .app {
+        padding: 12px;
+      }
+
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        grid-template-rows: auto auto;
+      }
+
+      .controls,
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      h1 {
+        white-space: normal;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>⚔️ Generals LLM</h1>
+      <div class="turn">
+        <span>当前回合</span>
+        <strong id="turnNumber">0</strong>
+        <span id="phaseText">阶段 0</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="board-wrap" aria-label="游戏棋盘">
+        <canvas id="board" width="540" height="540"></canvas>
+      </section>
+
+      <aside>
+        <section class="card">
+          <h2>玩家排名</h2>
+          <div id="rankings" class="rank-list"></div>
+        </section>
+
+        <section class="card">
+          <h2>战报日志</h2>
+          <div id="log" class="log"></div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="controls">
+      <div>
+        <button id="stepBtn">下一轮 ▶</button>
+        <button id="resetBtn" class="secondary">重置</button>
+      </div>
+      <div id="message" class="message">正在连接服务器...</div>
+    </footer>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("board");
+    const ctx = canvas.getContext("2d");
+    const turnNumber = document.getElementById("turnNumber");
+    const phaseText = document.getElementById("phaseText");
+    const rankingsEl = document.getElementById("rankings");
+    const logEl = document.getElementById("log");
+    const messageEl = document.getElementById("message");
+    const stepBtn = document.getElementById("stepBtn");
+    const resetBtn = document.getElementById("resetBtn");
+
+    const colors = ["#4A90D9", "#E74C3C", "#2ECC71", "#F39C12"];
+    const neutralPlain = "#173f2a";
+    const gridLine = "rgba(255,255,255,0.16)";
+    const state = {
+      data: null,
+      displayOwners: [],
+      busy: false,
+      canvasSize: 0
+    };
+
+    function colorForPlayer(player) {
+      return colors[player] || "#9aa4b2";
+    }
+
+    function hexToRgb(hex) {
+      const value = hex.replace("#", "");
+      return {
+        r: parseInt(value.slice(0, 2), 16),
+        g: parseInt(value.slice(2, 4), 16),
+        b: parseInt(value.slice(4, 6), 16)
+      };
+    }
+
+    function mixColor(a, b, t) {
+      const ca = hexToRgb(a);
+      const cb = hexToRgb(b);
+      const r = Math.round(ca.r + (cb.r - ca.r) * t);
+      const g = Math.round(ca.g + (cb.g - ca.g) * t);
+      const bValue = Math.round(ca.b + (cb.b - ca.b) * t);
+      return `rgb(${r}, ${g}, ${bValue})`;
+    }
+
+    function terrainBase(tile) {
+      if (tile.type === "MOUNTAIN") return "#5c6470";
+      if (tile.type === "CITY") return "#355039";
+      if (tile.type === "GENERAL") return "#26483b";
+      if (tile.type === "FOG" || tile.type === "FOG_OBSTACLE") return "#05060a";
+      return neutralPlain;
+    }
+
+    function tileColor(tile, displayOwner) {
+      if (tile.type === "FOG" || tile.type === "FOG_OBSTACLE") return "#05060a";
+      if (tile.occupier === null || tile.occupier < 0) return terrainBase(tile);
+      const playerColor = colorForPlayer(tile.occupier);
+      return mixColor(terrainBase(tile), playerColor, Math.min(1, Math.max(0, displayOwner)));
+    }
+
+    function ensureDisplayOwners(data) {
+      if (!data) return;
+      const needed = data.height * data.width;
+      if (state.displayOwners.length !== needed) {
+        state.displayOwners = new Array(needed).fill(0);
+      }
+      for (let y = 0; y < data.height; y += 1) {
+        for (let x = 0; x < data.width; x += 1) {
+          const idx = y * data.width + x;
+          const tile = data.tiles[y][x];
+          const target = tile.occupier !== null && tile.occupier >= 0 ? 1 : 0;
+          state.displayOwners[idx] += (target - state.displayOwners[idx]) * 0.16;
+        }
+      }
+    }
+
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const size = Math.max(300, Math.floor(Math.min(rect.width, rect.height || rect.width)));
+      const dpr = window.devicePixelRatio || 1;
+      if (state.canvasSize !== size || canvas.width !== Math.floor(size * dpr)) {
+        state.canvasSize = size;
+        canvas.width = Math.floor(size * dpr);
+        canvas.height = Math.floor(size * dpr);
+        canvas.style.height = `${size}px`;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function drawMountain(x, y, size) {
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.beginPath();
+      ctx.moveTo(x + size * 0.18, y + size * 0.72);
+      ctx.lineTo(x + size * 0.44, y + size * 0.24);
+      ctx.lineTo(x + size * 0.72, y + size * 0.72);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(25,28,34,0.42)";
+      ctx.beginPath();
+      ctx.moveTo(x + size * 0.38, y + size * 0.72);
+      ctx.lineTo(x + size * 0.62, y + size * 0.34);
+      ctx.lineTo(x + size * 0.86, y + size * 0.72);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawBoard(time) {
+      if (!state.data) {
+        requestAnimationFrame(drawBoard);
+        return;
+      }
+      resizeCanvas();
+      const data = state.data;
+      ensureDisplayOwners(data);
+      const size = canvas.clientWidth;
+      const cell = size / Math.max(data.width, data.height);
+      ctx.clearRect(0, 0, size, size);
+
+      for (let y = 0; y < data.height; y += 1) {
+        for (let x = 0; x < data.width; x += 1) {
+          const tile = data.tiles[y][x];
+          const idx = y * data.width + x;
+          const px = x * cell;
+          const py = y * cell;
+          ctx.fillStyle = tileColor(tile, state.displayOwners[idx]);
+          ctx.fillRect(px, py, cell, cell);
+
+          if (tile.type === "MOUNTAIN") drawMountain(px, py, cell);
+          if (tile.type === "CITY") {
+            ctx.strokeStyle = "#f3c969";
+            ctx.lineWidth = Math.max(2, cell * 0.06);
+            ctx.strokeRect(px + cell * 0.14, py + cell * 0.14, cell * 0.72, cell * 0.72);
+          }
+          if (tile.type === "GENERAL") {
+            ctx.fillStyle = "#ffe082";
+            ctx.font = `bold ${Math.floor(cell * 0.32)}px "Microsoft YaHei", sans-serif`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("★", px + cell * 0.5, py + cell * 0.28);
+          }
+          if (tile.type === "FOG" || tile.type === "FOG_OBSTACLE") {
+            ctx.fillStyle = "rgba(255,255,255,0.68)";
+            ctx.font = `bold ${Math.floor(cell * 0.38)}px Consolas, monospace`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("?", px + cell * 0.5, py + cell * 0.5);
+          } else if (tile.army > 0 || tile.occupier !== null) {
+            ctx.fillStyle = "#ffffff";
+            ctx.font = `bold ${Math.floor(cell * 0.28)}px "SFMono-Regular", Consolas, monospace`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = "rgba(0,0,0,0.45)";
+            ctx.strokeText(String(tile.army), px + cell * 0.5, py + cell * 0.55);
+            ctx.fillText(String(tile.army), px + cell * 0.5, py + cell * 0.55);
+          }
+
+          ctx.strokeStyle = gridLine;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(px + 0.5, py + 0.5, cell - 1, cell - 1);
+        }
+      }
+      requestAnimationFrame(drawBoard);
+    }
+
+    function renderRankings(rankings) {
+      rankingsEl.innerHTML = "";
+      rankings.forEach((row, index) => {
+        const item = document.createElement("div");
+        item.className = "rank-row";
+        const badge = document.createElement("div");
+        badge.className = "badge";
+        badge.style.background = colorForPlayer(row.player);
+        badge.textContent = `P${row.player}`;
+        const main = document.createElement("div");
+        main.innerHTML = `
+          <div class="player-name">${index + 1}. ${row.emoji || ""} ${row.name || `玩家 ${row.player}`}</div>
+          <div class="player-meta">兵力 ${row.army} · 土地 ${row.tiles} · 击杀 ${row.kills}</div>
+        `;
+        const status = document.createElement("div");
+        status.className = `status ${row.alive ? "alive" : "dead"}`;
+        status.textContent = row.alive ? "存活" : "阵亡";
+        item.append(badge, main, status);
+        rankingsEl.appendChild(item);
+      });
+    }
+
+    function renderLog(logs) {
+      const latest = (logs || []).slice(-10).reverse();
+      logEl.innerHTML = "";
+      latest.forEach((entry) => {
+        const item = document.createElement("div");
+        item.className = "log-item";
+        const actor = entry.player === null || entry.player === undefined ? "系统" : `P${entry.player}`;
+        item.innerHTML = `<b>R${entry.round} T${entry.turn}.${entry.phase} ${actor}</b> ${entry.message}`;
+        if (entry.player !== null && entry.player !== undefined) {
+          item.style.borderLeftColor = colorForPlayer(entry.player);
+        }
+        logEl.appendChild(item);
+      });
+    }
+
+    function render(data) {
+      state.data = data;
+      turnNumber.textContent = data.turn;
+      phaseText.textContent = `阶段 ${data.phase}`;
+      renderRankings(data.rankings || []);
+      renderLog(data.logs || []);
+      const winnerText = data.winner === null || data.winner === undefined ? "" : `，胜者 P${data.winner}`;
+      messageEl.textContent = data.finished ? `战局结束${winnerText}` : "服务器已连接";
+      stepBtn.disabled = state.busy || Boolean(data.finished);
+    }
+
+    async function requestJson(url, options) {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return response.json();
+    }
+
+    async function loadState() {
+      try {
+        const data = await requestJson("/api/state");
+        render(data);
+      } catch (error) {
+        messageEl.textContent = `连接失败：${error.message}`;
+      }
+    }
+
+    async function stepRound() {
+      if (state.busy) return;
+      state.busy = true;
+      stepBtn.disabled = true;
+      messageEl.textContent = "正在推演下一轮...";
+      try {
+        const data = await requestJson("/api/step", { method: "POST" });
+        render(data);
+      } catch (error) {
+        messageEl.textContent = `推演失败：${error.message}`;
+      } finally {
+        state.busy = false;
+        if (state.data && !state.data.finished) stepBtn.disabled = false;
+      }
+    }
+
+    async function resetGame() {
+      if (state.busy) return;
+      state.busy = true;
+      messageEl.textContent = "正在重置战场...";
+      try {
+        const data = await requestJson("/api/reset", { method: "POST" });
+        state.displayOwners = [];
+        render(data);
+      } catch (error) {
+        messageEl.textContent = `重置失败：${error.message}`;
+      } finally {
+        state.busy = false;
+      }
+    }
+
+    stepBtn.addEventListener("click", stepRound);
+    resetBtn.addEventListener("click", resetGame);
+    window.addEventListener("resize", resizeCanvas);
+
+    loadState();
+    setInterval(loadState, 3000);
+    requestAnimationFrame(drawBoard);
+  </script>
+</body>
+</html>
