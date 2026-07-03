@@ -347,9 +347,11 @@
       <div class="control-group">
         <button id="prevBtn" class="secondary">◀</button>
         <input id="roundInput" type="number" min="0" value="0" style="width:60px;text-align:center;">
+        <button id="autoBtn" class="secondary">自动播放</button>
         <button id="goBtn" class="secondary">跳转</button>
         <button id="nextBtn">下一轮 ▶</button>
         <button id="resetBtn" class="secondary">重置</button>
+        <button id="pauseBtn" class="secondary">暂停计算</button>
       </div>
       <div id="message" class="message">已就绪</div>
     </footer>
@@ -369,9 +371,11 @@
     const messageEl = document.getElementById("message");
     const prevBtn = document.getElementById("prevBtn");
     const nextBtn = document.getElementById("nextBtn");
+    const autoBtn = document.getElementById("autoBtn");
     const goBtn = document.getElementById("goBtn");
     const roundInput = document.getElementById("roundInput");
     const resetBtn = document.getElementById("resetBtn");
+    const pauseBtn = document.getElementById("pauseBtn");
 
     const neutralPlain = "#173f2a";
     const gridLine = "rgba(255,255,255,0.16)";
@@ -384,6 +388,7 @@
     let currentRound = -1;
     let totalRounds = 0;
     let isBusy = false;
+    let isAutoPlaying = false;
 
     function colorForPlayer(player) {
       return colors[player] || "#9aa4b2";
@@ -614,7 +619,9 @@
       try {
         const data = await requestJson("/api/rounds");
         totalRounds = data.computed;
-        cacheInfo.textContent = `缓存 ${data.current + 1}/${data.computed}`;
+        const status = data.terminal_reason ? "已达上限" : data.paused ? "已暂停" : "计算中";
+        cacheInfo.textContent = `缓存 ${data.current + 1}/${data.computed} · ${status}`;
+        pauseBtn.textContent = data.paused ? "继续计算" : "暂停计算";
         roundInput.max = Math.max(0, data.computed);
         return data;
       } catch (error) {
@@ -651,10 +658,12 @@
       isBusy = false;
       if (!data || !data.finished) nextBtn.disabled = false;
       updateCacheInfo();
+      return data;
     }
 
     async function goToRound() {
       if (isBusy) return;
+      setAutoPlaying(false);
       const targetRound = parseInt(roundInput.value, 10);
       if (Number.isNaN(targetRound) || targetRound < 0) return;
       isBusy = true;
@@ -683,6 +692,7 @@
     }
 
     async function prevRound() {
+      setAutoPlaying(false);
       const cur = parseInt(roundInput.value, 10) || 0;
       if (cur > 1) {
         roundInput.value = cur - 1;
@@ -691,6 +701,7 @@
     }
 
     async function resetGame() {
+      setAutoPlaying(false);
       state.busy = true;
       isBusy = true;
       nextBtn.disabled = true;
@@ -703,6 +714,7 @@
         roundInput.value = 0;
         render(data);
         await updateCacheInfo();
+        nextBtn.disabled = false;
       } catch (error) {
         messageEl.textContent = `重置失败：${error.message}`;
       } finally {
@@ -712,13 +724,50 @@
       }
     }
 
+    async function togglePause() {
+      try {
+        const rounds = await updateCacheInfo();
+        const paused = rounds && rounds.paused;
+        const path = paused ? "/api/resume" : "/api/pause";
+        await requestJson(path, { method: "POST" });
+        await updateCacheInfo();
+        messageEl.textContent = paused ? "后台计算已继续" : "后台计算已暂停";
+      } catch (error) {
+        messageEl.textContent = `切换失败：${error.message}`;
+      }
+    }
+
+    function setAutoPlaying(value) {
+      isAutoPlaying = Boolean(value);
+      autoBtn.textContent = isAutoPlaying ? "暂停播放" : "自动播放";
+      autoBtn.classList.toggle("secondary", !isAutoPlaying);
+    }
+
+    async function autoPlay() {
+      if (isAutoPlaying) {
+        setAutoPlaying(false);
+        return;
+      }
+      setAutoPlaying(true);
+      while (isAutoPlaying) {
+        const data = await nextRound();
+        if (!data || data.finished) {
+          setAutoPlaying(false);
+          break;
+        }
+        await sleep(80);
+      }
+    }
+
     nextBtn.addEventListener("click", nextRound);
+    autoBtn.addEventListener("click", autoPlay);
     prevBtn.addEventListener("click", prevRound);
     goBtn.addEventListener("click", goToRound);
     roundInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") goToRound();
     });
     resetBtn.addEventListener("click", resetGame);
+    pauseBtn.addEventListener("click", togglePause);
     window.addEventListener("resize", resizeCanvas);
 
     setInterval(updateCacheInfo, 2000);

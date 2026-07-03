@@ -76,7 +76,7 @@ class Game:
                     continue
                 source = self.board.tiles[move.from_y][move.from_x]
                 army_size = source.army // 2 if move.take_half else source.army - 1
-                # Priority: chase(0) < defensive(1) < normal(2) < attack_general(3)
+                # Higher priority executes first. Decapitation attacks should win ordering.
                 priority = self._move_priority(player_idx, move)
                 flat_moves.append((priority, -army_size, player_idx, move))
 
@@ -91,9 +91,9 @@ class Game:
     def _move_priority(self, player_idx: int, move: Move) -> int:
         """Higher number = higher priority."""
         target = self.board.tiles[move.to_y][move.to_x]
-        # Attack on enemy general: lowest priority (0)
+        # Attack on enemy general: highest priority.
         if target.type == TileType.GENERAL and target.occupier != player_idx and target.occupier is not None:
-            return 0
+            return 4
         # Normal attack: medium priority (1)
         if target.occupier != player_idx and target.occupier is not None and target.occupier >= 0:
             return 1
@@ -158,6 +158,7 @@ class Game:
             target.army = remaining
 
             if was_general:
+                target.type = TileType.CITY
                 self._capture_player(attacker=player_idx, defeated=defeated_player)
         else:
             target.army = -remaining

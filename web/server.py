@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents import AGENT_CONFIGS, LLMAgent
+from agents import AGENT_CONFIGS, HeuristicAgent, LLMAgent
 from engine.board import TILE_FOG, TILE_FOG_OBSTACLE, Board
 from engine.game import Game
 from engine.types import Move, PlayerState, Tile, TileType
@@ -28,10 +28,13 @@ PORT = 8900
 WIDTH = 12
 HEIGHT = 12
 NUM_PLAYERS = 4
-HALF_TURNS_PER_ROUND = 6
+HALF_TURNS_PER_ROUND = 12
+MAX_STRATEGIC_ROUNDS = 180
+MAX_TURNS = 540
 WEB_DIR = Path(__file__).resolve().parent
 
 PLAYER_PERSONALITIES = ["gambler", "conservative", "trickster", "crazy"]
+AGENT_MODE = os.environ.get("GENERALS_AGENT_MODE", "heuristic").strip().lower()
 
 
 class GameService:
@@ -45,8 +48,10 @@ class GameService:
         self._current_round = -1
         self._thread: threading.Thread | None = None
         self._compute_error: str | None = None
+        self._paused = False
+        self._terminal_reason: str | None = None
         self.game: Game
-        self.agents: list[LLMAgent]
+        self.agents: list[Any]
         self.logs: list[dict[str, Any]] = []
         self._initial_state: dict[str, Any] = {}
         with self._lock:
@@ -58,6 +63,8 @@ class GameService:
         self._rounds = []
         self._current_round = -1
         self._compute_error = None
+        self._paused = False
+        self._terminal_reason = None
         self.round_index = 0
         self.seed = random.randrange(1_000_000_000)
         board = Board.generate_map(WIDTH, HEIGHT, NUM_PLAYERS, seed=self.seed)
@@ -71,7 +78,7 @@ class GameService:
         ]
         self.game = Game(board, players)
         self.agents = [
-            LLMAgent(player_idx=i, personality=personality)
+            self._create_agent(i, personality)
             for i, personality in enumerate(PLAYER_PERSONALITIES)
         ]
         self.logs = [{
@@ -82,6 +89,11 @@ class GameService:
             "message": "新地图已生成，4 名指挥官进入战场。",
         }]
         self._initial_state = self._state_snapshot()
+
+    def _create_agent(self, player_idx: int, personality: str) -> Any:
+        if AGENT_MODE == "llm":
+            return LLMAgent(player_idx=player_idx, personality=personality)
+        return HeuristicAgent(player_idx=player_idx, personality=personality)
 
     def _start_thread(self) -> None:
         self._thread = threading.Thread(target=self._compute_all, daemon=True)
@@ -98,11 +110,36 @@ class GameService:
         self._start_thread()
         return self.current_state()
 
+    def pause(self) -> dict[str, Any]:
+        with self._lock:
+            self._stop = True
+            self._paused = True
+            thread = self._thread
+        if thread and thread.is_alive():
+            thread.join()
+        return self.current_state()
+
+    def resume(self) -> dict[str, Any]:
+        with self._lock:
+            if self._terminal_reason or self.game.is_finished():
+                return self.current_state()
+            self._stop = False
+            self._paused = False
+            thread = self._thread
+            should_start = thread is None or not thread.is_alive()
+        if should_start:
+            self._start_thread()
+        return self.current_state()
+
     def _compute_all(self) -> None:
         try:
             while True:
                 with self._lock:
-                    if self._stop or self.game.is_finished():
+                    if self._stop or self.game.is_finished() or self._terminal_reason:
+                        return
+                    if self.round_index >= MAX_STRATEGIC_ROUNDS or self.game.turn >= MAX_TURNS:
+                        self._terminal_reason = "max_rounds_or_turns"
+                        self._append_log(None, "达到推演上限，后台计算已停止。")
                         return
                 round_data = self._compute_one_round()
                 with self._lock:
@@ -129,7 +166,7 @@ class GameService:
 
         self.round_index += 1
         log_start = len(self.logs)
-        moves_by_player: dict[int, list[Move]] = {}
+        strategies: dict[int, dict[str, Any]] = {}
 
         # Parallel agent decisions
         alive_agents = [(a, self.game.get_player_view(a.player_idx)) for a in self.agents if self.game.alive[a.player_idx]]
@@ -145,21 +182,50 @@ class GameService:
                     strategy = future.result()
                 except Exception:
                     strategy = agent.simulate_llm(view)
+                strategies[agent.player_idx] = strategy
+
+        frames = [self._state_snapshot()]
+        first_half_turn = True
+        total_moves_by_player: dict[int, int] = {idx: 0 for idx in strategies}
+        zero_half_turns_by_player: dict[int, int] = {idx: 0 for idx in strategies}
+
+        for _ in range(max(1, HALF_TURNS_PER_ROUND)):
+            if self.game.is_finished():
+                break
+
+            moves_by_player: dict[int, list[Move]] = {}
+            diagnostics_by_player: dict[int, list[str]] = {}
+            for agent in self.agents:
+                if not self.game.alive[agent.player_idx] or agent.player_idx not in strategies:
+                    continue
+                strategy = strategies[agent.player_idx]
+                view = self.game.get_player_view(agent.player_idx)
+                execution_strategy = {
+                    **strategy,
+                    "_context": {
+                        "stats": view.get("stats") or {},
+                        "rankings": view.get("rankings") or [],
+                    },
+                }
                 executor = Executor(
                     agent.player_idx,
                     view["board"],
                     strategy.get("constraints") or {},
                 )
-                moves = executor.execute(strategy)
-                moves_by_player[agent.player_idx] = moves
-                self._append_strategy_log(agent.player_idx, strategy, moves)
-
-        frames = [self._state_snapshot()]
-        for _ in range(max(1, HALF_TURNS_PER_ROUND)):
-            if self.game.is_finished():
-                break
+                result = executor.execute_with_diagnostics(execution_strategy)
+                moves_by_player[agent.player_idx] = result.moves
+                total_moves_by_player[agent.player_idx] += len(result.moves)
+                if not result.moves:
+                    zero_half_turns_by_player[agent.player_idx] += 1
+                diagnostics_by_player[agent.player_idx] = [
+                    f"{diag.objective_type}:{diag.status}:{diag.reason}:{diag.generated_moves}"
+                    for diag in result.diagnostics
+                ]
+                if first_half_turn:
+                    self._append_strategy_log(agent.player_idx, strategy, result.moves, result.diagnostics)
 
             self.game.step(moves_by_player)
+            first_half_turn = False
 
             if self.game.is_finished():
                 winner = self._winner()
@@ -170,12 +236,19 @@ class GameService:
 
             frames.append(self._state_snapshot())
 
+        for player_idx, total_moves in sorted(total_moves_by_player.items()):
+            self._append_log(
+                player_idx,
+                f"执行汇总: {HALF_TURNS_PER_ROUND} 半回合内重算动作，总计 {total_moves} 动，空转 {zero_half_turns_by_player[player_idx]} 次。",
+            )
+
         return {
             "round": self.round_index,
             "frames": frames,
             "logs": self.logs[log_start:],
             "finished": self.game.is_finished(),
             "winner": self._winner() if self.game.is_finished() else None,
+            "terminal_reason": self._terminal_reason,
         }
 
     def advance(self, target: int | None = None) -> dict[str, Any]:
@@ -201,6 +274,8 @@ class GameService:
                 "finished": finished,
                 "winner": winner,
                 "error": self._compute_error,
+                "paused": self._paused,
+                "terminal_reason": self._terminal_reason,
             }
 
     def rounds(self) -> dict[str, Any]:
@@ -214,6 +289,9 @@ class GameService:
                 "current": self._current_round,
                 "computed": len(self._rounds),
                 "finished": finished,
+                "paused": self._paused,
+                "terminal_reason": self._terminal_reason,
+                "agent_mode": AGENT_MODE,
             }
 
     def current_state(self) -> dict[str, Any]:
@@ -246,6 +324,8 @@ class GameService:
             "winner": winner,
             "logs": self.logs[-80:],
             "seed": self.seed,
+            "terminal_reason": self._terminal_reason,
+            "agent_mode": AGENT_MODE,
         }
 
     def status(self) -> dict[str, Any]:
@@ -266,6 +346,9 @@ class GameService:
                 "current_round": self._current_round,
                 "ready": self._current_round + 1 < len(self._rounds),
                 "error": self._compute_error,
+                "paused": self._paused,
+                "terminal_reason": self._terminal_reason,
+                "agent_mode": AGENT_MODE,
             }
 
     def _serialize_tiles(self, tiles: list[list[Tile]]) -> list[list[dict[str, Any]]]:
@@ -287,7 +370,7 @@ class GameService:
             "army": tile.army,
         }
 
-    def _append_strategy_log(self, player_idx: int, strategy: dict[str, Any], moves: list[Move]) -> None:
+    def _append_strategy_log(self, player_idx: int, strategy: dict[str, Any], moves: list[Move], diagnostics: list[Any]) -> None:
         plan = str(strategy.get("round_plan") or "执行默认行动。")
         reasoning = str(strategy.get("reasoning") or "")
         stance = str(strategy.get("stance", "?"))
@@ -308,7 +391,11 @@ class GameService:
         label = f"{plan}"
         if reasoning and reasoning not in plan:
             label += f" | {reasoning[:120]}"
-        self._append_log(player_idx, f"[{stance}] {label} / {len(moves)}\u52a8 {n_obj}\u76ee\u6807 {n_dir}\u76f4\u4ee4 g{garrison} / {move_text}")
+        diag_text = "；".join(
+            f"{getattr(diag, 'objective_type', '?')}:{getattr(diag, 'reason', '?')}"
+            for diag in diagnostics[:3]
+        )
+        self._append_log(player_idx, f"[{stance}] {label} / 首半回合 {len(moves)}\u52a8 {n_obj}\u76ee\u6807 {n_dir}\u76f4\u4ee4 g{garrison} / {move_text} / {diag_text}")
 
     def _append_log(self, player_idx: int | None, message: str) -> None:
         self.logs.append({
@@ -378,6 +465,12 @@ class GeneralsHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/reset":
             self._send_json(SERVICE.reset())
+            return
+        if path == "/api/pause":
+            self._send_json(SERVICE.pause())
+            return
+        if path == "/api/resume":
+            self._send_json(SERVICE.resume())
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
