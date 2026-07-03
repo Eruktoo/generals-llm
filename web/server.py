@@ -30,7 +30,7 @@ HEIGHT = 18
 NUM_PLAYERS = 4
 HALF_TURNS_PER_ROUND = 12
 MAX_STRATEGIC_ROUNDS = 180
-MAX_TURNS = 540
+MAX_TURNS = MAX_STRATEGIC_ROUNDS * (HALF_TURNS_PER_ROUND // 2)
 WEB_DIR = Path(__file__).resolve().parent
 
 PLAYER_PERSONALITIES = ["gambler", "conservative", "trickster", "crazy"]

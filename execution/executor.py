@@ -821,17 +821,22 @@ class Executor:
             for ranking in rankings
             if ranking.get("player") != self.player_idx and ranking.get("alive")
         ]
-        if len(alive_enemies) != 1:
+        if not alive_enemies:
             return False
 
         own_army = int(stats.get("army", 0))
-        enemy_army = max(1, int(alive_enemies[0].get("army", 0)))
+        max_enemy_army = max(1, max(int(enemy.get("army", 0)) for enemy in alive_enemies))
+        total_enemy_army = max(1, sum(int(enemy.get("army", 0)) for enemy in alive_enemies))
         own_tiles = int(stats.get("tiles", 0))
-        enemy_tiles = max(1, int(alive_enemies[0].get("tiles", 0)))
+        max_enemy_tiles = max(1, max(int(enemy.get("tiles", 0)) for enemy in alive_enemies))
         return (
             own_army >= 120
-            and own_tiles >= enemy_tiles
-            and (own_army >= enemy_army * 2 or own_army - enemy_army >= 250)
+            and own_tiles >= max_enemy_tiles
+            and (
+                own_army >= max_enemy_army * 2
+                or own_army >= total_enemy_army * 1.05
+                or own_army - max_enemy_army >= 250
+            )
         )
 
     def _visible_enemy_targets(self) -> list[tuple[int, int, int]]:
@@ -882,6 +887,19 @@ class Executor:
         constraints: dict,
         reserved_destinations: set[tuple[int, int]],
     ) -> tuple[int, int] | None:
+        path_candidates: list[tuple[int, int, int, int, list[tuple[int, int]]]] = []
+        for rank, target_x, target_y in targets[:12]:
+            path = self._path_to(from_x, from_y, target_x, target_y, constraints, prefer_owned=False)
+            if path is None or len(path) < 2:
+                continue
+            nx, ny = path[1]
+            if (nx, ny) in reserved_destinations:
+                continue
+            path_candidates.append((rank, len(path), target_y, target_x, path))
+        if path_candidates:
+            _, _, _, _, path = min(path_candidates)
+            return path[1]
+
         best_target = min(
             targets,
             key=lambda item: (
