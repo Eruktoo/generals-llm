@@ -76,7 +76,10 @@ class Board:
             for x in range(width)
             if board.tiles[y][x].type != TileType.MOUNTAIN
         ]
-        city_count = min(rng.randint(8, 12), max(0, len(free_positions) - num_players))
+        city_count = min(
+            rng.randint(max(6, int(width * height * 0.06)), max(12, int(width * height * 0.09))),
+            max(0, len(free_positions) - num_players),
+        )
         for x, y in rng.sample(free_positions, city_count):
             board.tiles[y][x] = Tile(TileType.CITY, None, rng.randint(35, 50))
 
