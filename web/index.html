@@ -120,7 +120,7 @@
     aside {
       min-height: 0;
       display: grid;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: auto auto 1fr;
       gap: 16px;
     }
 
@@ -211,6 +211,35 @@
     .log-item b {
       color: white;
       font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      min-height: 58px;
+      padding: 9px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      background: rgba(0, 0, 0, 0.18);
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .metric-value {
+      margin-top: 5px;
+      color: var(--text);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 18px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
     }
 
     .controls {
@@ -337,6 +366,11 @@
         </section>
 
         <section class="card">
+          <h2>质量指标</h2>
+          <div id="metrics" class="metrics-grid"></div>
+        </section>
+
+        <section class="card">
           <h2>战报日志</h2>
           <div id="log" class="log"></div>
         </section>
@@ -367,6 +401,7 @@
 
     const colors = ["#4A90D9", "#E74C3C", "#2ECC71", "#F39C12"];
     const rankingsEl = document.getElementById("rankings");
+    const metricsEl = document.getElementById("metrics");
     const logEl = document.getElementById("log");
     const messageEl = document.getElementById("message");
     const prevBtn = document.getElementById("prevBtn");
@@ -569,6 +604,32 @@
       });
     }
 
+    function percent(value) {
+      return `${Math.round(Number(value || 0) * 1000) / 10}%`;
+    }
+
+    function renderMetrics(metrics) {
+      if (!metrics) return;
+      const dominance = metrics.dominance || {};
+      const winner = metrics.winner === null || metrics.winner === undefined ? "未定" : `P${metrics.winner}`;
+      const leader = dominance.leader === null || dominance.leader === undefined ? "无" : `P${dominance.leader}`;
+      const items = [
+        ["轮 / Turn", `${metrics.computed_rounds || 0} / ${metrics.turn || 0}`],
+        ["胜者", winner],
+        ["空转率", percent(metrics.zero_half_turn_rate)],
+        ["反向重复", percent(metrics.reverse_move_rate)],
+        ["动作密度", `${metrics.avg_moves_per_half_turn || 0}`],
+        ["优势拖延", `${leader} · ${dominance.age_rounds || 0}轮`]
+      ];
+      metricsEl.innerHTML = "";
+      items.forEach(([label, value]) => {
+        const node = document.createElement("div");
+        node.className = "metric";
+        node.innerHTML = `<div class="metric-label">${label}</div><div class="metric-value">${value}</div>`;
+        metricsEl.appendChild(node);
+      });
+    }
+
     function render(data) {
       state.data = data;
       turnNumber.textContent = data.turn;
@@ -623,6 +684,8 @@
         cacheInfo.textContent = `缓存 ${data.current + 1}/${data.computed} · ${status}`;
         pauseBtn.textContent = data.paused ? "继续计算" : "暂停计算";
         roundInput.max = Math.max(0, data.computed);
+        const metrics = await requestJson("/api/metrics");
+        renderMetrics(metrics);
         return data;
       } catch (error) {
         return null;

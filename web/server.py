@@ -188,6 +188,11 @@ class GameService:
         first_half_turn = True
         total_moves_by_player: dict[int, int] = {idx: 0 for idx in strategies}
         zero_half_turns_by_player: dict[int, int] = {idx: 0 for idx in strategies}
+        reverse_moves_by_player: dict[int, int] = {idx: 0 for idx in strategies}
+        previous_edges_by_player: dict[int, set[tuple[tuple[int, int], tuple[int, int]]]] = {
+            idx: set() for idx in strategies
+        }
+        half_turns_by_player: dict[int, int] = {idx: 0 for idx in strategies}
 
         for _ in range(max(1, HALF_TURNS_PER_ROUND)):
             if self.game.is_finished():
@@ -214,9 +219,15 @@ class GameService:
                 )
                 result = executor.execute_with_diagnostics(execution_strategy)
                 moves_by_player[agent.player_idx] = result.moves
+                half_turns_by_player[agent.player_idx] += 1
                 total_moves_by_player[agent.player_idx] += len(result.moves)
                 if not result.moves:
                     zero_half_turns_by_player[agent.player_idx] += 1
+                reverse_moves_by_player[agent.player_idx] += self._count_reverse_moves(
+                    agent.player_idx,
+                    result.moves,
+                    previous_edges_by_player,
+                )
                 diagnostics_by_player[agent.player_idx] = [
                     f"{diag.objective_type}:{diag.status}:{diag.reason}:{diag.generated_moves}"
                     for diag in result.diagnostics
@@ -249,6 +260,13 @@ class GameService:
             "finished": self.game.is_finished(),
             "winner": self._winner() if self.game.is_finished() else None,
             "terminal_reason": self._terminal_reason,
+            "metrics": self._round_metrics(
+                frames[-1],
+                half_turns_by_player,
+                total_moves_by_player,
+                zero_half_turns_by_player,
+                reverse_moves_by_player,
+            ),
         }
 
     def advance(self, target: int | None = None) -> dict[str, Any]:
@@ -294,6 +312,10 @@ class GameService:
                 "agent_mode": AGENT_MODE,
             }
 
+    def metrics(self) -> dict[str, Any]:
+        with self._lock:
+            return self._quality_metrics_locked()
+
     def current_state(self) -> dict[str, Any]:
         with self._lock:
             if 0 <= self._current_round < len(self._rounds):
@@ -327,6 +349,126 @@ class GameService:
             "terminal_reason": self._terminal_reason,
             "agent_mode": AGENT_MODE,
         }
+
+    def _count_reverse_moves(
+        self,
+        player_idx: int,
+        moves: list[Move],
+        previous_edges_by_player: dict[int, set[tuple[tuple[int, int], tuple[int, int]]]],
+    ) -> int:
+        previous_edges = previous_edges_by_player.get(player_idx, set())
+        reverse_count = 0
+        current_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+        for move in moves:
+            edge = ((move.from_x, move.from_y), (move.to_x, move.to_y))
+            reverse = (edge[1], edge[0])
+            if reverse in previous_edges:
+                reverse_count += 1
+            current_edges.add(edge)
+        previous_edges_by_player[player_idx] = current_edges
+        return reverse_count
+
+    def _round_metrics(
+        self,
+        state: dict[str, Any],
+        half_turns_by_player: dict[int, int],
+        total_moves_by_player: dict[int, int],
+        zero_half_turns_by_player: dict[int, int],
+        reverse_moves_by_player: dict[int, int],
+    ) -> dict[str, Any]:
+        total_half_turns = sum(half_turns_by_player.values())
+        total_moves = sum(total_moves_by_player.values())
+        zero_half_turns = sum(zero_half_turns_by_player.values())
+        reverse_moves = sum(reverse_moves_by_player.values())
+        return {
+            "round": self.round_index,
+            "turn": state["turn"],
+            "total_moves": total_moves,
+            "avg_moves_per_half_turn": round(total_moves / total_half_turns, 2) if total_half_turns else 0,
+            "zero_half_turns": zero_half_turns,
+            "zero_half_turn_rate": round(zero_half_turns / total_half_turns, 4) if total_half_turns else 0,
+            "reverse_moves": reverse_moves,
+            "reverse_move_rate": round(reverse_moves / total_moves, 4) if total_moves else 0,
+            "by_player": {
+                str(player_idx): {
+                    "half_turns": half_turns_by_player.get(player_idx, 0),
+                    "moves": total_moves_by_player.get(player_idx, 0),
+                    "zero_half_turns": zero_half_turns_by_player.get(player_idx, 0),
+                    "reverse_moves": reverse_moves_by_player.get(player_idx, 0),
+                }
+                for player_idx in range(NUM_PLAYERS)
+            },
+        }
+
+    def _quality_metrics_locked(self) -> dict[str, Any]:
+        rounds = self._rounds
+        latest_state = rounds[-1]["frames"][-1] if rounds else self._initial_state
+        round_metrics = [round_data.get("metrics") or {} for round_data in rounds]
+        total_moves = sum(int(item.get("total_moves", 0)) for item in round_metrics)
+        zero_half_turns = sum(int(item.get("zero_half_turns", 0)) for item in round_metrics)
+        reverse_moves = sum(int(item.get("reverse_moves", 0)) for item in round_metrics)
+        total_half_turns = sum(
+            sum(int(player.get("half_turns", 0)) for player in (item.get("by_player") or {}).values())
+            for item in round_metrics
+        )
+        dominance = self._dominance_summary(rounds)
+        return {
+            "seed": self.seed,
+            "agent_mode": AGENT_MODE,
+            "computed_rounds": len(rounds),
+            "turn": latest_state["turn"],
+            "finished": bool(rounds[-1]["finished"]) if rounds else bool(latest_state["finished"]),
+            "winner": rounds[-1]["winner"] if rounds else latest_state["winner"],
+            "terminal_reason": self._terminal_reason,
+            "total_moves": total_moves,
+            "avg_moves_per_half_turn": round(total_moves / total_half_turns, 2) if total_half_turns else 0,
+            "zero_half_turn_rate": round(zero_half_turns / total_half_turns, 4) if total_half_turns else 0,
+            "reverse_move_rate": round(reverse_moves / total_moves, 4) if total_moves else 0,
+            "dominance": dominance,
+            "players": self._player_metric_rows(latest_state),
+            "recent_rounds": round_metrics[-12:],
+        }
+
+    def _dominance_summary(self, rounds: list[dict[str, Any]]) -> dict[str, Any]:
+        first_round: int | None = None
+        leader: int | None = None
+        latest_margin = 0.0
+        for round_data in rounds:
+            state = round_data["frames"][-1]
+            alive = [row for row in state.get("rankings", []) if row.get("alive")]
+            if len(alive) < 2:
+                continue
+            top = alive[0]
+            second = alive[1]
+            second_army = max(1, int(second.get("army", 0)))
+            second_tiles = max(1, int(second.get("tiles", 0)))
+            army_ratio = int(top.get("army", 0)) / second_army
+            tile_ratio = int(top.get("tiles", 0)) / second_tiles
+            latest_margin = round(army_ratio, 2)
+            if army_ratio >= 2.0 and tile_ratio >= 1.2:
+                first_round = int(round_data.get("round", 0))
+                leader = int(top.get("player", -1))
+                break
+        last_round = int(rounds[-1].get("round", 0)) if rounds else 0
+        return {
+            "leader": leader,
+            "first_round": first_round,
+            "age_rounds": (last_round - first_round) if first_round is not None else 0,
+            "latest_army_ratio": latest_margin,
+        }
+
+    def _player_metric_rows(self, state: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "player": int(row["player"]),
+                "name": row.get("name"),
+                "army": int(row.get("army", 0)),
+                "tiles": int(row.get("tiles", 0)),
+                "alive": bool(row.get("alive")),
+                "kills": int(row.get("kills", 0)),
+            }
+            for row in state.get("rankings", [])
+        ]
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -446,6 +588,9 @@ class GeneralsHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/rounds":
             self._send_json(SERVICE.rounds())
+            return
+        if path == "/api/metrics":
+            self._send_json(SERVICE.metrics())
             return
         if path in ("", "/"):
             self.path = "/index.html"
