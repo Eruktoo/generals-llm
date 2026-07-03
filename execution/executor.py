@@ -146,7 +146,7 @@ class Executor:
                 used_sources.add((move.from_x, move.from_y))
 
         if not moves:
-            fallback_moves = self._safe_expansion_fallback(used_sources)
+            fallback_moves = self._safe_expansion_fallback(used_sources, constraints)
             diagnostics.append(
                 ExecutionDiagnostic(
                     "fallback_expand",
@@ -710,9 +710,10 @@ class Executor:
         _, _, _, packed = min(candidates)
         return self._unpack(packed)
 
-    def _safe_expansion_fallback(self, used_sources: set[tuple[int, int]]) -> list[Move]:
+    def _safe_expansion_fallback(self, used_sources: set[tuple[int, int]], constraints: dict | None = None) -> list[Move]:
         relaxed = {
             **self.base_constraints,
+            **(constraints or {}),
             "min_general_garrison": 1,
             "min_city_garrison": 1,
             "max_commitment_percent": 100,

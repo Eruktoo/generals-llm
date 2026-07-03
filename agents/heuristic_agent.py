@@ -80,6 +80,8 @@ class HeuristicAgent:
         analysis = self._analyze_board(board)
 
         own_army = int(stats.get("army", 0))
+        own_tiles = int(stats.get("tiles", 0))
+        turn = int(game_view.get("turn", 0))
         max_enemy_army = max(
             [
                 int(row.get("army", 0))
@@ -99,13 +101,21 @@ class HeuristicAgent:
             for row in rankings
             if row.get("player") != self.player_idx and row.get("alive")
         )
-        dominant = (
+        dominant = own_army >= 30 and enemy_total > 0 and (
             own_army >= max_enemy_army * float(self.profile["dominance_ratio"])
             or max_stack >= max(30, int(enemy_total * float(self.profile["dominance_stack_share"])))
         )
         contact = bool(analysis["enemy_tiles"])
+        local_contact = self._has_local_enemy_contact(analysis)
+        opening = self._is_opening_phase(
+            turn,
+            own_tiles,
+            len(analysis["frontier_tiles"]),
+            local_contact,
+            dominant,
+        )
 
-        if (contact and self.profile["attack_bias"] >= 0.9) or dominant:
+        if (local_contact and self.profile["attack_bias"] >= 0.9) or dominant:
             stance = "aggressive"
         elif own_army < max_enemy_army * (0.65 * float(self.profile["defense_bias"])):
             stance = "defensive"
@@ -113,10 +123,17 @@ class HeuristicAgent:
             stance = "balanced"
 
         constraints = self._constraints(stance, dominant)
+        if opening:
+            constraints = {
+                **constraints,
+                "min_general_garrison": 1,
+                "min_city_garrison": 1,
+                "max_commitment_percent": 100,
+            }
         objectives: list[dict[str, Any]] = []
 
         attack_target = self._best_attack_target(analysis)
-        if attack_target is not None:
+        if attack_target is not None and not opening:
             objectives.append({
                 "type": "attack_position",
                 "target": {"x": attack_target[0], "y": attack_target[1]},
@@ -124,7 +141,7 @@ class HeuristicAgent:
                 "commitment": "full" if dominant or stance == "aggressive" else "limited",
             })
 
-        pressure_target = attack_target or self._best_pressure_target(board, analysis, stats)
+        pressure_target = None if opening else attack_target or self._best_pressure_target(board, analysis, stats)
         if pressure_target is not None:
             objectives.append({
                 "type": "attack_position",
@@ -133,11 +150,11 @@ class HeuristicAgent:
                 "commitment": "full" if dominant else "limited",
             })
 
-        expand_region = self._expansion_region(board, stats, analysis, dominant)
+        expand_region = self._expansion_region(board, stats, analysis, dominant, turn)
         objectives.append({
             "type": "expand_region",
             "region": expand_region,
-            "priority": min(1.0, (0.8 if not contact else 0.45) * float(self.profile["explore_bias"])),
+            "priority": min(1.0, (0.95 if opening else 0.8 if not contact else 0.45) * float(self.profile["explore_bias"])),
         })
 
         if stance != "aggressive":
@@ -157,15 +174,34 @@ class HeuristicAgent:
             "round_plan": self._plan_text(stance, dominant, alive_enemies, contact),
             "reasoning": (
                 f"heuristic baseline: own_army={own_army}, max_enemy_army={max_enemy_army}, "
-                f"max_stack={max_stack}, enemy_total={enemy_total}, contact={contact}, profile={self.personality}"
+                f"max_stack={max_stack}, enemy_total={enemy_total}, contact={contact}, "
+                f"local_contact={local_contact}, opening={opening}, "
+                f"frontier={len(analysis['frontier_tiles'])}, profile={self.personality}"
             ),
             "objectives": objectives,
-            "direct_orders": self._direct_orders(board, analysis, stance, dominant),
-            "constraints": constraints,
+            "direct_orders": self._direct_orders(board, analysis, stance, dominant, opening),
+            "constraints": {**constraints, "opening_spread": opening},
         }
 
     def simulate_llm(self, game_view: dict) -> dict:
         return self.decide(game_view)
+
+    def _is_opening_phase(self, turn: int, own_tiles: int, frontier_tiles: int, contact: bool, dominant: bool) -> bool:
+        if contact or dominant:
+            return False
+        return turn < 24 or own_tiles < 12 or frontier_tiles < 3
+
+    def _has_local_enemy_contact(self, analysis: dict[str, list[tuple[int, int, Tile]]]) -> bool:
+        if not analysis["own_tiles"] or not analysis["enemy_tiles"]:
+            return False
+        enemies = {(x, y) for x, y, _ in analysis["enemy_tiles"]}
+        for x, y, _ in analysis["own_tiles"]:
+            for dx in range(-3, 4):
+                remaining = 3 - abs(dx)
+                for dy in range(-remaining, remaining + 1):
+                    if (x + dx, y + dy) in enemies:
+                        return True
+        return False
 
     def _constraints(self, stance: str, dominant: bool) -> dict:
         garrison = int(self.profile["garrison"])
@@ -227,10 +263,11 @@ class HeuristicAgent:
         analysis: dict[str, list[tuple[int, int, Tile]]],
         stance: str,
         dominant: bool,
+        opening: bool,
     ) -> list[dict]:
         sources = sorted(
             analysis["frontier_tiles"] or analysis["own_tiles"],
-            key=lambda item: (-item[2].army, item[1], item[0]),
+            key=lambda item: self._source_rank(board, item, opening),
         )
         profile_orders = int(self.profile["direct_orders"])
         max_orders = profile_orders + 2 if dominant else profile_orders if stance == "aggressive" else max(1, profile_orders - 1)
@@ -243,11 +280,11 @@ class HeuristicAgent:
                 break
             if tile.army <= 1 or (x, y) in used_sources:
                 continue
-            step = self._best_adjacent_step(board, x, y, dominant)
+            step = self._best_adjacent_step(board, x, y, dominant, opening)
             if step is None or step in used_targets:
                 continue
             nx, ny = step
-            amount = self._order_amount(tile, board.tiles[ny][nx], dominant)
+            amount = self._order_amount(tile, board.tiles[ny][nx], dominant, opening)
             orders.append({
                 "from": {"x": x, "y": y},
                 "to": {"x": nx, "y": ny},
@@ -257,7 +294,7 @@ class HeuristicAgent:
             used_targets.add((nx, ny))
         return orders
 
-    def _order_amount(self, source: Tile, target: Tile, dominant: bool) -> int:
+    def _order_amount(self, source: Tile, target: Tile, dominant: bool, opening: bool) -> int:
         if source.army <= 2:
             return 1
         if target.type == TileType.GENERAL and target.occupier != self.player_idx:
@@ -266,39 +303,69 @@ class HeuristicAgent:
             return max(1, source.army // 2)
         if target.occupier is not None and target.occupier >= 0 and target.occupier != self.player_idx:
             return max(source.army // 2, source.army - 1 if dominant else source.army // 2)
+        if opening and target.occupier is None and target.type != TileType.CITY:
+            return max(1, source.army - 1)
         if target.occupier == TILE_FOG:
-            return max(1, source.army // 2)
+            return max(1, source.army - 1 if opening else source.army // 2)
         return max(1, source.army - 1 if dominant else source.army // 2)
 
-    def _best_adjacent_step(self, board: Board, x: int, y: int, dominant: bool) -> tuple[int, int] | None:
+    def _best_adjacent_step(self, board: Board, x: int, y: int, dominant: bool, opening: bool) -> tuple[int, int] | None:
         candidates: list[tuple[int, int, int, int]] = []
+        has_opening_expansion = any(
+            self._is_opening_expansion_target(board.tiles[ny][nx])
+            for nx, ny in self._neighbors(board, x, y)
+        )
         for nx, ny in self._neighbors(board, x, y):
             tile = board.tiles[ny][nx]
             if tile.type == TileType.MOUNTAIN or tile.occupier == TILE_FOG_OBSTACLE:
                 continue
             if tile.occupier == self.player_idx:
                 continue
-            rank = self._adjacent_rank(tile, dominant)
+            if opening and has_opening_expansion and tile.occupier is None and tile.type == TileType.CITY and tile.army > 10:
+                continue
+            rank = self._adjacent_rank(tile, dominant, opening)
             candidates.append((rank, tile.army, ny, nx))
         if not candidates:
             return None
         _, _, ny, nx = min(candidates)
         return nx, ny
 
-    def _adjacent_rank(self, tile: Tile, dominant: bool) -> int:
+    def _source_rank(self, board: Board, item: tuple[int, int, Tile], opening: bool) -> tuple[int, int, int, int]:
+        x, y, tile = item
+        if not opening:
+            return -tile.army, y, x, 0
+        expansion_options = sum(
+            1
+            for nx, ny in self._neighbors(board, x, y)
+            if self._is_opening_expansion_target(board.tiles[ny][nx])
+        )
+        return -expansion_options, tile.army, y, x
+
+    def _adjacent_rank(self, tile: Tile, dominant: bool, opening: bool) -> int:
         if tile.occupier is not None and tile.occupier >= 0:
             if tile.type == TileType.GENERAL:
                 return 0
             if tile.type == TileType.CITY:
                 return 1
             return 2
+        if opening and self._is_opening_expansion_target(tile):
+            return 1 if tile.occupier is None else 2
         if tile.occupier is None and tile.type == TileType.CITY:
+            if opening and tile.army > 10:
+                return 7
             return max(1, round(3 / float(self.profile["city_bias"])))
         if tile.occupier is None:
             return 4
         if tile.occupier == TILE_FOG:
             return max(2, round((5 if dominant else 6) / float(self.profile["explore_bias"])))
         return 9
+
+    def _is_opening_expansion_target(self, tile: Tile) -> bool:
+        if tile.type == TileType.MOUNTAIN or tile.occupier == TILE_FOG_OBSTACLE:
+            return False
+        if tile.occupier == TILE_FOG:
+            return True
+        return tile.occupier is None and tile.type != TileType.CITY
 
     def _best_attack_target(self, analysis: dict[str, list[tuple[int, int, Tile]]]) -> tuple[int, int] | None:
         if not analysis["enemy_tiles"]:
@@ -341,8 +408,22 @@ class HeuristicAgent:
         stats: dict,
         analysis: dict[str, list[tuple[int, int, Tile]]],
         dominant: bool,
+        turn: int,
     ) -> dict:
+        own_tiles = int(stats.get("tiles", 0))
+        opening = self._is_opening_phase(
+            turn,
+            own_tiles,
+            len(analysis["frontier_tiles"]),
+            self._has_local_enemy_contact(analysis),
+            dominant,
+        )
         targets = analysis["enemy_tiles"] if dominant and analysis["enemy_tiles"] else []
+        if opening:
+            targets = [
+                item for item in analysis["neutral_tiles"]
+                if item[2].type != TileType.CITY
+            ] or analysis["fog_tiles"]
         targets = targets or analysis["neutral_tiles"] or analysis["fog_tiles"] or analysis["frontier_tiles"] or analysis["own_tiles"]
         radius = 5 if dominant else 3
         return self._region_around_points(board, targets, radius, stats.get("general"))
