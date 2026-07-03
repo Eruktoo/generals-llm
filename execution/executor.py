@@ -274,24 +274,157 @@ class Executor:
             return []
 
         commitment = objective.get("commitment", "limited")
-        max_stacks = 3 if commitment == "full" else 1
-        sources = [
+        max_stacks = 4 if commitment == "full" else 2
+        target_tile = self.board.tiles[target_y][target_x]
+        raw_sources = [
             (x, y, tile)
             for x, y, tile in self._own_tiles()
             if (x, y) not in used_sources and tile.army > 1
         ]
-        sources.sort(key=lambda item: (-item[2].army, self._manhattan(item[0], item[1], target_x, target_y)))
+        raw_sources.sort(
+            key=lambda item: (
+                self._manhattan(item[0], item[1], target_x, target_y),
+                -item[2].army,
+                item[1],
+                item[0],
+            )
+        )
+        raw_sources = raw_sources[: max(5, max_stacks * 2)]
+        source_plans = [
+            (x, y, tile, path)
+            for x, y, tile in raw_sources
+            for path in [self._path_to(x, y, target_x, target_y, constraints, prefer_owned=False)]
+            if path is not None and len(path) > 1
+        ]
+        source_plans.sort(key=lambda item: (len(item[3]), -item[2].army, item[1], item[0]))
+        if not source_plans:
+            return []
+
+        if self._should_stage_attack(target_tile):
+            available = self._available_attack_force(source_plans, max_distance=4)
+            required = self._required_attack_force(target_tile)
+            if available < required:
+                staged = self._stage_attack(source_plans, target_x, target_y, constraints, max_stacks)
+                if staged:
+                    return staged
 
         moves: list[Move] = []
-        for x, y, _ in sources[:max_stacks]:
-            step = self._best_step_toward(x, y, target_x, target_y, constraints, prefer_owned=False)
-            if step is None:
+        reserved_destinations: set[tuple[int, int]] = set()
+        for x, y, tile, path in source_plans[:max_stacks]:
+            nx, ny = path[1]
+            if (nx, ny) in reserved_destinations:
                 continue
-            nx, ny = step
-            move = self._build_constrained_move(x, y, nx, ny, constraints)
+            take_half = self._attack_take_half(tile, self.board.tiles[ny][nx], target_tile)
+            move = self._build_constrained_move(x, y, nx, ny, constraints, take_half)
+            if move is None:
+                move = self._build_constrained_move(x, y, nx, ny, constraints)
             if move is not None:
                 moves.append(move)
+                reserved_destinations.add((nx, ny))
         return moves
+
+    def _should_stage_attack(self, target: Tile) -> bool:
+        if target.type == TileType.GENERAL and target.occupier != self.player_idx:
+            return False
+        return target.occupier != self.player_idx and (
+            target.type == TileType.CITY
+            or target.occupier == TILE_FOG
+            or (target.occupier is not None and target.occupier >= 0)
+        )
+
+    def _available_attack_force(
+        self,
+        source_plans: list[tuple[int, int, Tile, list[tuple[int, int]]]],
+        max_distance: int,
+    ) -> int:
+        return sum(
+            max(0, self._moving_army(tile.army, False))
+            for _, _, tile, path in source_plans
+            if len(path) - 1 <= max_distance
+        )
+
+    def _required_attack_force(self, target: Tile) -> int:
+        if target.occupier == TILE_FOG:
+            return 25
+        if target.type == TileType.CITY:
+            return max(8, int(target.army * 1.5) + 1)
+        if target.occupier is not None and target.occupier >= 0:
+            return max(4, int(target.army * 1.3) + 1)
+        return max(2, target.army + 1)
+
+    def _stage_attack(
+        self,
+        source_plans: list[tuple[int, int, Tile, list[tuple[int, int]]]],
+        target_x: int,
+        target_y: int,
+        constraints: dict,
+        max_stacks: int,
+    ) -> list[Move]:
+        staging = min(
+            source_plans,
+            key=lambda item: (
+                len(item[3]),
+                -item[2].army,
+                self._frontier_pressure(item[0], item[1]),
+                item[1],
+                item[0],
+            ),
+        )
+        staging_pos = (staging[0], staging[1])
+        merge_sources = [
+            item for item in source_plans
+            if (item[0], item[1]) != staging_pos
+        ]
+        merge_sources.sort(key=lambda item: (-item[2].army, len(item[3]), item[1], item[0]))
+
+        moves: list[Move] = []
+        reserved_destinations: set[tuple[int, int]] = set()
+        for x, y, _tile, _path in merge_sources[:max_stacks]:
+            path = self._path_to(x, y, staging_pos[0], staging_pos[1], constraints, prefer_owned=True)
+            if path is None or len(path) < 2:
+                continue
+            nx, ny = path[1]
+            if (nx, ny) in reserved_destinations:
+                continue
+            move = self._build_constrained_move(x, y, nx, ny, constraints, take_half=True)
+            if move is None:
+                move = self._build_constrained_move(x, y, nx, ny, constraints)
+            if move is not None:
+                moves.append(move)
+                reserved_destinations.add((nx, ny))
+
+        if moves:
+            return moves
+
+        x, y, tile, path = staging
+        if len(path) < 2:
+            return []
+        nx, ny = path[1]
+        if self._manhattan(nx, ny, target_x, target_y) >= self._manhattan(x, y, target_x, target_y):
+            return []
+        move = self._build_constrained_move(x, y, nx, ny, constraints, take_half=True)
+        if move is None and tile.army >= self._required_attack_force(self.board.tiles[target_y][target_x]):
+            move = self._build_constrained_move(x, y, nx, ny, constraints)
+        return [move] if move is not None else []
+
+    def _attack_take_half(self, source: Tile, destination: Tile, final_target: Tile) -> bool | None:
+        if destination.occupier == self.player_idx:
+            return True
+        if final_target.type == TileType.GENERAL and final_target.occupier != self.player_idx:
+            return False
+        if destination.type == TileType.CITY and destination.occupier != self.player_idx:
+            return True if source.army // 2 > destination.army else False
+        if destination.occupier == TILE_FOG:
+            return True
+        return None
+
+    def _frontier_pressure(self, x: int, y: int) -> int:
+        pressure = 0
+        for nx, ny in self._neighbors(x, y):
+            tile = self.board.tiles[ny][nx]
+            if tile.occupier is not None and tile.occupier >= 0 and tile.occupier != self.player_idx:
+                pressure += tile.army
+        return pressure
 
     def _defend_region(
         self,
@@ -869,8 +1002,22 @@ class Executor:
         constraints: dict,
         prefer_owned: bool,
     ) -> tuple[int, int] | None:
-        if (from_x, from_y) == (target_x, target_y):
+        path = self._path_to(from_x, from_y, target_x, target_y, constraints, prefer_owned)
+        if path is None or len(path) < 2:
             return None
+        return path[1]
+
+    def _path_to(
+        self,
+        from_x: int,
+        from_y: int,
+        target_x: int,
+        target_y: int,
+        constraints: dict,
+        prefer_owned: bool,
+    ) -> list[tuple[int, int]] | None:
+        if (from_x, from_y) == (target_x, target_y):
+            return [(from_x, from_y)]
         if not self.board.in_bounds(target_x, target_y):
             return None
 
@@ -899,13 +1046,14 @@ class Executor:
         if (target_x, target_y) not in previous:
             return None
 
-        step = (target_x, target_y)
-        while previous[step] != (from_x, from_y):
-            parent = previous[step]
+        path = [(target_x, target_y)]
+        while previous[path[-1]] is not None:
+            parent = previous[path[-1]]
             if parent is None:
                 return None
-            step = parent
-        return step
+            path.append(parent)
+        path.reverse()
+        return path
 
     def _is_path_passable(self, tile: Tile) -> bool:
         if tile.type == TileType.MOUNTAIN or tile.occupier == TILE_FOG_OBSTACLE:

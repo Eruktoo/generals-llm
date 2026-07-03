@@ -247,14 +247,28 @@ class HeuristicAgent:
             if step is None or step in used_targets:
                 continue
             nx, ny = step
+            amount = self._order_amount(tile, board.tiles[ny][nx], dominant)
             orders.append({
                 "from": {"x": x, "y": y},
                 "to": {"x": nx, "y": ny},
-                "amount": max(1, tile.army - 1),
+                "amount": amount,
             })
             used_sources.add((x, y))
             used_targets.add((nx, ny))
         return orders
+
+    def _order_amount(self, source: Tile, target: Tile, dominant: bool) -> int:
+        if source.army <= 2:
+            return 1
+        if target.type == TileType.GENERAL and target.occupier != self.player_idx:
+            return max(1, source.army - 1)
+        if target.type == TileType.CITY and target.occupier != self.player_idx and not dominant:
+            return max(1, source.army // 2)
+        if target.occupier is not None and target.occupier >= 0 and target.occupier != self.player_idx:
+            return max(source.army // 2, source.army - 1 if dominant else source.army // 2)
+        if target.occupier == TILE_FOG:
+            return max(1, source.army // 2)
+        return max(1, source.army - 1 if dominant else source.army // 2)
 
     def _best_adjacent_step(self, board: Board, x: int, y: int, dominant: bool) -> tuple[int, int] | None:
         candidates: list[tuple[int, int, int, int]] = []
