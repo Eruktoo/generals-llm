@@ -30,19 +30,49 @@ class StrategyBot:
         self.name = f"heuristic:{self.personality}"
         self._agent = HeuristicAgent(self.player_idx, self.personality)
         self._strategy: dict | None = None
+        self._recent_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
 
     def reset(self, seed: int) -> None:
         self._strategy = None
+        self._recent_edges = set()
 
     def moves(self, game_view: dict, half_turn: int) -> list[Move]:
-        if self._strategy is None or half_turn % max(1, self.strategic_interval) == 0:
+        refreshed = self._strategy is None or half_turn % max(1, self.strategic_interval) == 0
+        if refreshed:
             self._strategy = self._agent.decide(game_view)
+        elif self._strategy is not None:
+            self._strategy = {
+                **self._strategy,
+                "direct_orders": [],
+                "_context": {
+                    "turn": int(game_view.get("turn", 0)),
+                    "stats": game_view.get("stats") or {},
+                    "rankings": game_view.get("rankings") or [],
+                    "personality": self.personality,
+                },
+            }
+        if self._strategy is not None:
+            stats = game_view.get("stats") or {}
+            turn = int(game_view.get("turn", 0))
+            own_tiles = int(stats.get("tiles", 0))
+            constraints = {
+                **(self._strategy.get("constraints") or {}),
+                "turn": turn,
+                "own_tiles": own_tiles,
+                "recent_edges": self._recent_edges,
+            }
+            self._strategy = {**self._strategy, "constraints": constraints}
         executor = Executor(
             self.player_idx,
             game_view["board"],
             self._strategy.get("constraints") or {},
         )
-        return executor.execute(self._strategy)
+        moves = executor.execute(self._strategy)
+        self._recent_edges = {
+            ((move.from_x, move.from_y), (move.to_x, move.to_y))
+            for move in moves
+        }
+        return moves
 
 
 @dataclass

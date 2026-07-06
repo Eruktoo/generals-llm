@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from collections import deque
 from copy import deepcopy
 from typing import TypeAlias
 
@@ -64,9 +65,16 @@ class Board:
 
         rng = random.Random(seed)
         board = Board(width, height)
+        start_positions = Board._starting_positions(width, height, num_players)
+        protected = Board._protected_start_positions(width, height, start_positions)
 
         mountain_count = int(width * height * 0.15)
-        all_positions = [(x, y) for y in range(height) for x in range(width)]
+        all_positions = [
+            (x, y)
+            for y in range(height)
+            for x in range(width)
+            if (x, y) not in protected
+        ]
         for x, y in rng.sample(all_positions, min(mountain_count, len(all_positions))):
             board.tiles[y][x].type = TileType.MOUNTAIN
 
@@ -74,7 +82,7 @@ class Board:
             (x, y)
             for y in range(height)
             for x in range(width)
-            if board.tiles[y][x].type != TileType.MOUNTAIN
+            if board.tiles[y][x].type != TileType.MOUNTAIN and (x, y) not in protected
         ]
         city_count = min(
             rng.randint(max(6, int(width * height * 0.06)), max(12, int(width * height * 0.09))),
@@ -83,11 +91,111 @@ class Board:
         for x, y in rng.sample(free_positions, city_count):
             board.tiles[y][x] = Tile(TileType.CITY, None, rng.randint(35, 50))
 
-        start_positions = Board._starting_positions(width, height, num_players)
+        Board._connect_open_terrain(board, start_positions)
         for player_idx, (x, y) in enumerate(start_positions):
             board.tiles[y][x] = Tile(TileType.GENERAL, player_idx, 0)
 
         return board
+
+    @staticmethod
+    def _protected_start_positions(
+        width: int,
+        height: int,
+        starts: list[tuple[int, int]],
+        radius: int = 2,
+    ) -> set[tuple[int, int]]:
+        protected: set[tuple[int, int]] = set()
+        for sx, sy in starts:
+            for dx in range(-radius, radius + 1):
+                remaining = radius - abs(dx)
+                for dy in range(-remaining, remaining + 1):
+                    x = sx + dx
+                    y = sy + dy
+                    if 0 <= x < width and 0 <= y < height:
+                        protected.add((x, y))
+        return protected
+
+    @staticmethod
+    def _connect_open_terrain(board: "Board", starts: list[tuple[int, int]]) -> None:
+        passable = Board._passable_positions(board)
+        if not passable:
+            return
+
+        main_component = Board._component_from(board, starts[0] if starts else next(iter(passable)))
+        for start in starts[1:]:
+            if start not in main_component:
+                Board._carve_path_to_component(board, start, main_component)
+                main_component = Board._component_from(board, starts[0])
+
+        while True:
+            passable = Board._passable_positions(board)
+            remaining = passable - main_component
+            if not remaining:
+                return
+            component_start = min(remaining, key=lambda item: (item[1], item[0]))
+            Board._carve_path_to_component(board, component_start, main_component)
+            main_component = Board._component_from(board, starts[0] if starts else component_start)
+
+    @staticmethod
+    def _passable_positions(board: "Board") -> set[tuple[int, int]]:
+        return {
+            (x, y)
+            for y, row in enumerate(board.tiles)
+            for x, tile in enumerate(row)
+            if tile.type not in (TileType.MOUNTAIN, TileType.CITY)
+        }
+
+    @staticmethod
+    def _component_from(board: "Board", start: tuple[int, int]) -> set[tuple[int, int]]:
+        sx, sy = start
+        if not board.in_bounds(sx, sy):
+            return set()
+        if board.tiles[sy][sx].type in (TileType.MOUNTAIN, TileType.CITY):
+            board.tiles[sy][sx] = Tile(TileType.PLAIN)
+
+        component = {start}
+        queue = deque([start])
+        while queue:
+            x, y = queue.popleft()
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if not board.in_bounds(nx, ny) or (nx, ny) in component:
+                    continue
+                if board.tiles[ny][nx].type in (TileType.MOUNTAIN, TileType.CITY):
+                    continue
+                component.add((nx, ny))
+                queue.append((nx, ny))
+        return component
+
+    @staticmethod
+    def _carve_path_to_component(
+        board: "Board",
+        start: tuple[int, int],
+        target_component: set[tuple[int, int]],
+    ) -> None:
+        queue = deque([start])
+        previous: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
+        target: tuple[int, int] | None = None
+
+        while queue:
+            x, y = queue.popleft()
+            if (x, y) in target_component:
+                target = (x, y)
+                break
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if not board.in_bounds(nx, ny) or (nx, ny) in previous:
+                    continue
+                previous[(nx, ny)] = (x, y)
+                queue.append((nx, ny))
+
+        if target is None:
+            return
+
+        cursor: tuple[int, int] | None = target
+        while cursor is not None:
+            x, y = cursor
+            if board.tiles[y][x].type in (TileType.MOUNTAIN, TileType.CITY):
+                board.tiles[y][x] = Tile(TileType.PLAIN)
+            cursor = previous[cursor]
 
     @staticmethod
     def _starting_positions(width: int, height: int, num_players: int) -> list[tuple[int, int]]:
@@ -124,4 +232,3 @@ class Board:
                 candidate = (x, y)
             positions.append(candidate)
         return positions[:num_players]
-

@@ -50,6 +50,7 @@ class GameService:
         self._compute_error: str | None = None
         self._paused = False
         self._terminal_reason: str | None = None
+        self._recent_edges_by_player: dict[int, set[tuple[tuple[int, int], tuple[int, int]]]] = {}
         self.game: Game
         self.agents: list[Any]
         self.logs: list[dict[str, Any]] = []
@@ -65,6 +66,7 @@ class GameService:
         self._compute_error = None
         self._paused = False
         self._terminal_reason = None
+        self._recent_edges_by_player = {idx: set() for idx in range(NUM_PLAYERS)}
         self.round_index = 0
         self.seed = random.randrange(1_000_000_000)
         board = Board.generate_map(WIDTH, HEIGHT, NUM_PLAYERS, seed=self.seed)
@@ -205,20 +207,40 @@ class GameService:
                     continue
                 strategy = strategies[agent.player_idx]
                 view = self.game.get_player_view(agent.player_idx)
-                execution_strategy = {
+                stats = view.get("stats") or {}
+                rankings = view.get("rankings") or []
+                turn = int(view.get("turn", 0))
+                own_tiles = int(stats.get("tiles", 0))
+                constraints = {
+                    **(strategy.get("constraints") or {}),
+                    "turn": turn,
+                    "own_tiles": own_tiles,
+                    "recent_edges": self._recent_edges_by_player.get(agent.player_idx, set()),
+                }
+                execution_strategy = strategy if first_half_turn else {
                     **strategy,
+                    "direct_orders": [],
+                }
+                execution_strategy = {
+                    **execution_strategy,
+                    "constraints": constraints,
                     "_context": {
-                        "stats": view.get("stats") or {},
-                        "rankings": view.get("rankings") or [],
+                        "turn": turn,
+                        "stats": stats,
+                        "rankings": rankings,
                     },
                 }
                 executor = Executor(
                     agent.player_idx,
                     view["board"],
-                    strategy.get("constraints") or {},
+                    constraints,
                 )
                 result = executor.execute_with_diagnostics(execution_strategy)
                 moves_by_player[agent.player_idx] = result.moves
+                self._recent_edges_by_player[agent.player_idx] = {
+                    ((move.from_x, move.from_y), (move.to_x, move.to_y))
+                    for move in result.moves
+                }
                 half_turns_by_player[agent.player_idx] += 1
                 total_moves_by_player[agent.player_idx] += len(result.moves)
                 if not result.moves:

@@ -126,6 +126,29 @@ class Executor:
             else:
                 diagnostics.append(ExecutionDiagnostic("direct_order", "blocked", "invalid_or_constrained", 0))
 
+        opening_spread_moves = self._opening_spread_moves(strategy, constraints, used_sources)
+        if opening_spread_moves:
+            moves.extend(opening_spread_moves)
+            for move in opening_spread_moves:
+                used_sources.add((move.from_x, move.from_y))
+            diagnostics.append(
+                ExecutionDiagnostic(
+                    "opening_spread",
+                    "ok",
+                    "frontier_flow",
+                    len(opening_spread_moves),
+                )
+            )
+        elif constraints.get("opening_spread"):
+            diagnostics.append(
+                ExecutionDiagnostic(
+                    "opening_spread",
+                    "blocked",
+                    "no_frontier_flow",
+                    0,
+                )
+            )
+
         objectives = sorted(
             strategy.get("objectives") or [],
             key=lambda objective: float(objective.get("priority", 0)),
@@ -170,11 +193,86 @@ class Executor:
             return self._expand_region(objective, constraints, used_sources)
         if objective_type == "reinforce_region":
             return self._reinforce_region(objective, constraints, used_sources)
+        if objective_type == "capture_city":
+            return self._capture_city(objective, constraints, used_sources)
         if objective_type == "attack_position":
             return self._attack_position(objective, constraints, used_sources)
         if objective_type == "defend_region":
             return self._defend_region(objective, constraints, used_sources)
         return []
+
+    def _opening_spread_moves(
+        self,
+        strategy: dict,
+        constraints: dict,
+        used_sources: set[tuple[int, int]],
+    ) -> list[Move]:
+        if not constraints.get("opening_spread"):
+            return []
+
+        general = self._general_position(strategy)
+        candidates: list[tuple[int, int, int, int, int, int, int, int, bool]] = []
+        reserved_targets: set[tuple[int, int]] = set()
+        for x, y, tile in self._own_tiles():
+            if (x, y) in used_sources or tile.army <= 1:
+                continue
+            for nx, ny in self._neighbors(x, y):
+                target = self.board.tiles[ny][nx]
+                onward_options = sum(
+                    1
+                    for tx, ty in self._neighbors(nx, ny)
+                    if self._is_expand_target(self.board.tiles[ty][tx])
+                )
+                outward = self._distance_from_general(nx, ny, general)
+                source_distance = self._distance_from_general(x, y, general)
+                target_is_expansion = self._is_expand_target(target)
+                target_is_frontier_feed = (
+                    target.occupier == self.player_idx
+                    and target.type not in (TileType.GENERAL, TileType.CITY)
+                    and onward_options > 0
+                    and outward > source_distance
+                    and target.army <= tile.army
+                )
+                if not target_is_expansion and not target_is_frontier_feed:
+                    continue
+                if not self._destination_allowed(nx, ny, constraints):
+                    continue
+                source_general_penalty = 1 if tile.type == TileType.GENERAL else 0
+                action_rank = 0 if target_is_expansion else 1
+                take_half = tile.type in (TileType.GENERAL, TileType.CITY) or target_is_frontier_feed
+                candidates.append(
+                    (
+                        action_rank,
+                        -onward_options,
+                        source_general_penalty,
+                        -outward,
+                        -source_distance,
+                        -tile.army,
+                        self._pack(x, y),
+                        self._pack(nx, ny),
+                        take_half,
+                    )
+                )
+
+        moves: list[Move] = []
+        used = set(used_sources)
+        max_moves = 3
+        for *_score, packed_source, packed_dest, take_half in sorted(candidates):
+            if len(moves) >= max_moves:
+                break
+            x, y = self._unpack(packed_source)
+            nx, ny = self._unpack(packed_dest)
+            if (x, y) in used or (nx, ny) in reserved_targets:
+                continue
+            move = self._build_constrained_move(x, y, nx, ny, constraints, take_half=take_half)
+            if move is None and take_half:
+                move = self._build_constrained_move(x, y, nx, ny, constraints, take_half=False)
+            if move is None:
+                continue
+            moves.append(move)
+            used.add((x, y))
+            reserved_targets.add((nx, ny))
+        return moves
 
     def _expand_region(
         self,
@@ -276,6 +374,8 @@ class Executor:
         commitment = objective.get("commitment", "limited")
         max_stacks = 4 if commitment == "full" else 2
         target_tile = self.board.tiles[target_y][target_x]
+        if self._is_neutral_city(target_tile) and objective.get("type") != "capture_city":
+            return []
         raw_sources = [
             (x, y, tile)
             for x, y, tile in self._own_tiles()
@@ -300,6 +400,9 @@ class Executor:
         if not source_plans:
             return []
 
+        if self._is_neutral_city(target_tile) and not self._city_capture_ready(target_tile, source_plans, constraints):
+            return []
+
         if self._should_stage_attack(target_tile):
             available = self._available_attack_force(source_plans, max_distance=4)
             required = self._required_attack_force(target_tile)
@@ -322,6 +425,27 @@ class Executor:
                 moves.append(move)
                 reserved_destinations.add((nx, ny))
         return moves
+
+    def _capture_city(
+        self,
+        objective: dict,
+        constraints: dict,
+        used_sources: set[tuple[int, int]],
+    ) -> list[Move]:
+        target = objective.get("target") or {}
+        if not self._is_int(target.get("x")) or not self._is_int(target.get("y")):
+            return []
+        target_x = int(target["x"])
+        target_y = int(target["y"])
+        if not self.board.in_bounds(target_x, target_y):
+            return []
+        if not self._is_neutral_city(self.board.tiles[target_y][target_x]):
+            return []
+        return self._attack_position(
+            {**objective, "type": "capture_city", "commitment": objective.get("commitment", "limited")},
+            constraints,
+            used_sources,
+        )
 
     def _should_stage_attack(self, target: Tile) -> bool:
         if target.type == TileType.GENERAL and target.occupier != self.player_idx:
@@ -351,6 +475,18 @@ class Executor:
         if target.occupier is not None and target.occupier >= 0:
             return max(4, int(target.army * 1.3) + 1)
         return max(2, target.army + 1)
+
+    def _city_capture_ready(
+        self,
+        target: Tile,
+        source_plans: list[tuple[int, int, Tile, list[tuple[int, int]]]],
+        constraints: dict,
+    ) -> bool:
+        if not self._is_neutral_city(target):
+            return True
+        nearby_force = self._available_attack_force(source_plans, max_distance=3)
+        required = target.army + 2
+        return nearby_force >= required
 
     def _stage_attack(
         self,
@@ -514,6 +650,8 @@ class Executor:
             return None
 
         source = self.board.tiles[from_y][from_x]
+        if self._is_bad_reverse_move(from_x, from_y, to_x, to_y, constraints):
+            return None
         possible = [take_half] if take_half is not None else [False, True]
         for half in possible:
             if half is None:
@@ -523,6 +661,9 @@ class Executor:
                 continue
             moving_army = self._moving_army(source.army, half)
             if moving_army <= 0:
+                continue
+            target = self.board.tiles[to_y][to_x]
+            if self._is_neutral_city(target) and moving_army <= target.army + 1:
                 continue
             if not self._respects_source_constraints(source, moving_army, constraints):
                 continue
@@ -544,10 +685,40 @@ class Executor:
             moving_army = self._moving_army(source.army, half)
             if moving_army <= 0:
                 continue
+            target = self.board.tiles[to_y][to_x]
+            if self._is_neutral_city(target) and moving_army <= target.army + 1:
+                continue
             if not self._respects_source_constraints(source, moving_army, relaxed):
                 continue
             return move
         return None
+
+    def _is_bad_reverse_move(
+        self,
+        from_x: int,
+        from_y: int,
+        to_x: int,
+        to_y: int,
+        constraints: dict,
+    ) -> bool:
+        recent_edges = constraints.get("recent_edges") or set()
+        if ((to_x, to_y), (from_x, from_y)) not in recent_edges:
+            return False
+        target = self.board.tiles[to_y][to_x]
+        if target.occupier != self.player_idx:
+            return False
+        if target.type == TileType.GENERAL:
+            return not self._owned_position_under_pressure(to_x, to_y)
+        if target.type == TileType.CITY:
+            return False
+        return True
+
+    def _owned_position_under_pressure(self, x: int, y: int) -> bool:
+        for nx, ny in self._neighbors(x, y):
+            tile = self.board.tiles[ny][nx]
+            if tile.occupier is not None and tile.occupier >= 0 and tile.occupier != self.player_idx:
+                return True
+        return False
 
     def _respects_source_constraints(self, source: Tile, moving_army: int, constraints: dict) -> bool:
         total_army = max(1, self._total_visible_army())
@@ -566,6 +737,8 @@ class Executor:
         tile = self.board.tiles[y][x]
         if tile.type == TileType.MOUNTAIN or tile.occupier == TILE_FOG_OBSTACLE:
             return False
+        if self._is_neutral_city(tile):
+            return self._city_entry_allowed(tile, constraints)
         if constraints.get("avoid_fog") and tile.occupier == TILE_FOG:
             return False
         return True
@@ -726,6 +899,8 @@ class Executor:
             for nx, ny in self._neighbors(x, y):
                 target = self.board.tiles[ny][nx]
                 if target.type == TileType.MOUNTAIN or target.occupier == TILE_FOG_OBSTACLE:
+                    continue
+                if self._is_neutral_city(target):
                     continue
                 if target.occupier == self.player_idx:
                     continue
@@ -1077,6 +1252,8 @@ class Executor:
     def _is_path_passable(self, tile: Tile) -> bool:
         if tile.type == TileType.MOUNTAIN or tile.occupier == TILE_FOG_OBSTACLE:
             return False
+        if self._is_neutral_city(tile):
+            return False
         return tile.occupier in (self.player_idx, None, TILE_FOG) or (
             tile.occupier is not None and tile.occupier >= 0
         )
@@ -1088,7 +1265,7 @@ class Executor:
         elif tile.occupier == TILE_FOG:
             rank = 1
         elif tile.occupier is None:
-            rank = 2
+            rank = 8 if tile.type == TileType.CITY else 2
         elif tile.occupier == self.player_idx:
             rank = 0 if prefer_owned else 3
         else:
@@ -1115,7 +1292,15 @@ class Executor:
         return False
 
     def _is_expand_target(self, tile: Tile) -> bool:
-        return tile.occupier is None or tile.occupier == TILE_FOG
+        return (tile.occupier is None and tile.type != TileType.CITY) or tile.occupier == TILE_FOG
+
+    def _is_neutral_city(self, tile: Tile) -> bool:
+        return tile.type == TileType.CITY and tile.occupier is None
+
+    def _city_entry_allowed(self, tile: Tile, constraints: dict) -> bool:
+        if not self._is_neutral_city(tile):
+            return True
+        return True
 
     def _own_tiles(self, region: Region | None = None) -> list[tuple[int, int, Tile]]:
         tiles: list[tuple[int, int, Tile]] = []
@@ -1153,6 +1338,27 @@ class Executor:
         if not owned:
             return 9999
         return min(self._manhattan(x, y, ox, oy) for ox, oy, _ in owned)
+
+    def _general_position(self, strategy: dict) -> tuple[int, int] | None:
+        context = strategy.get("_context") or {}
+        stats = context.get("stats") or {}
+        general = stats.get("general")
+        if (
+            isinstance(general, (tuple, list))
+            and len(general) == 2
+            and self._is_int(general[0])
+            and self._is_int(general[1])
+        ):
+            return int(general[0]), int(general[1])
+        for x, y, tile in self._own_tiles():
+            if tile.type == TileType.GENERAL:
+                return x, y
+        return None
+
+    def _distance_from_general(self, x: int, y: int, general: tuple[int, int] | None) -> int:
+        if general is None:
+            return 0
+        return self._manhattan(x, y, general[0], general[1])
 
     @staticmethod
     def _moving_army(source_army: int, take_half: bool) -> int:
