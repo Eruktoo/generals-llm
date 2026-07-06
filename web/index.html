@@ -44,8 +44,8 @@
       min-height: 100vh;
       display: grid;
       grid-template-rows: auto 1fr auto;
-      gap: 16px;
-      padding: 18px;
+      gap: 10px;
+      padding: 10px;
     }
 
     header,
@@ -58,9 +58,9 @@
     }
 
     header {
-      min-height: 68px;
+      min-height: 58px;
       border-radius: 8px;
-      padding: 14px 18px;
+      padding: 10px 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -92,8 +92,8 @@
 
     main {
       display: grid;
-      grid-template-columns: minmax(300px, 1fr) 320px;
-      gap: 16px;
+      grid-template-columns: minmax(520px, 1fr) 300px;
+      gap: 10px;
       align-items: stretch;
       min-height: 0;
     }
@@ -102,14 +102,14 @@
       min-width: 0;
       display: grid;
       place-items: center;
-      padding: 12px;
+      padding: 8px;
       border-radius: 8px;
       border: 1px solid rgba(255, 255, 255, 0.12);
       background: rgba(0, 0, 0, 0.18);
     }
 
     canvas {
-      width: min(100%, 540px);
+      width: min(100%, calc(100vh - 104px), 900px);
       aspect-ratio: 1 / 1;
       display: block;
       border-radius: 8px;
@@ -121,7 +121,7 @@
       min-height: 0;
       display: grid;
       grid-template-rows: auto auto 1fr;
-      gap: 16px;
+      gap: 10px;
     }
 
     .card {
@@ -318,11 +318,15 @@
 
     @media (max-width: 900px) {
       .app {
-        padding: 12px;
+        padding: 10px;
       }
 
       main {
         grid-template-columns: 1fr;
+      }
+
+      canvas {
+        width: min(100%, calc(100vh - 180px));
       }
 
       aside {

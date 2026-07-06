@@ -112,6 +112,7 @@
       grid-template-columns: minmax(480px, 1fr) minmax(320px, 420px);
       gap: 14px;
       min-height: 0;
+      align-items: start;
     }
 
     section {
@@ -125,7 +126,8 @@
 
     .board-wrap {
       display: grid;
-      place-items: center;
+      justify-items: center;
+      align-items: start;
       min-height: 0;
       overflow: hidden;
     }
@@ -142,6 +144,8 @@
       display: grid;
       grid-template-rows: auto auto 1fr;
       gap: 12px;
+      max-height: calc(100vh - 154px);
+      overflow: hidden;
     }
 
     h2 {
@@ -199,6 +203,7 @@
 
     .move-list {
       min-height: 0;
+      max-height: 100%;
       overflow: auto;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -227,6 +232,9 @@
       }
       canvas {
         width: 100%;
+      }
+      .side {
+        max-height: none;
       }
     }
   </style>
