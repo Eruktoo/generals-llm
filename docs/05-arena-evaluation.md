@@ -14,6 +14,14 @@ Run a quick baseline evaluation:
 python scripts/evaluate_arena.py --games 20 --seed 1 --bots heuristic:baseline random
 ```
 
+Run the local 1v1 arena website:
+
+```bash
+python -B arena_web/server.py
+```
+
+The arena website defaults to port `8910`.
+
 Run two heuristic personalities with slower high-level strategy refresh:
 
 ```bash

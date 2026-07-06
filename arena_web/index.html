@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Generals 1v1 Arena</title>
+  <style>
+    :root {
+      --bg: #15181f;
+      --panel: #20252e;
+      --panel-strong: #2a303b;
+      --line: #394150;
+      --text: #f4f7fb;
+      --muted: #9aa8ba;
+      --accent: #f2c14e;
+      --blue: #4a90d9;
+      --red: #e4574f;
+      --green: #67d391;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 14px;
+      padding: 18px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(90px, 1fr));
+      gap: 10px;
+      align-items: end;
+      padding: 14px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 0;
+    }
+
+    select,
+    input,
+    button {
+      height: 36px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #12161d;
+      color: var(--text);
+      padding: 0 10px;
+      font: inherit;
+      min-width: 0;
+    }
+
+    button {
+      cursor: pointer;
+      background: var(--accent);
+      color: #15181f;
+      border-color: var(--accent);
+      font-weight: 800;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(420px, 1fr) minmax(320px, 0.7fr);
+      gap: 14px;
+      min-height: 0;
+    }
+
+    section {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .metric {
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 76px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .metric .value {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 22px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .bars {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .bar {
+      display: grid;
+      grid-template-columns: 110px 1fr 64px;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .track {
+      height: 16px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #10141a;
+      border: 1px solid var(--line);
+    }
+
+    .fill {
+      height: 100%;
+      width: 0;
+      background: var(--blue);
+    }
+
+    .fill.p1 { background: var(--red); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 9px 8px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 700;
+      background: #191e26;
+      position: sticky;
+      top: 0;
+    }
+
+    .table-wrap {
+      max-height: 520px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .note {
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .status {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+    }
+
+    @media (max-width: 980px) {
+      .controls,
+      main,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .status {
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <h1>Generals 1v1 Arena</h1>
+        <div class="sub">?? seed ??????????????? bot ???????</div>
+      </div>
+      <div id="status" class="status">idle</div>
+    </header>
+
+    <form id="controls" class="controls">
+      <label>P0
+        <select id="bot0"></select>
+      </label>
+      <label>P1
+        <select id="bot1"></select>
+      </label>
+      <label>??
+        <input id="games" type="number" min="1" max="100" value="10">
+      </label>
+      <label>Seed
+        <input id="seed" type="number" min="0" value="1">
+      </label>
+      <label>?
+        <input id="width" type="number" min="6" max="24" value="12">
+      </label>
+      <label>?
+        <input id="height" type="number" min="6" max="24" value="12">
+      </label>
+      <label>Turn ??
+        <input id="maxTurns" type="number" min="50" max="1500" value="400">
+      </label>
+      <label>????
+        <input id="interval" type="number" min="1" max="60" value="1">
+      </label>
+      <button id="run" type="submit">Run</button>
+    </form>
+
+    <main>
+      <section>
+        <h2>??</h2>
+        <div id="metrics" class="metrics"></div>
+        <div id="bars" class="bars"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Seed</th>
+                <th>Winner</th>
+                <th>Turns</th>
+                <th>Finished</th>
+                <th>Reverse</th>
+                <th>Zero</th>
+                <th>Dominance Lag</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>??</h2>
+        <div class="note">
+          <p><b>finished_rate</b> ?????????????????</p>
+          <p><b>dominance_lag_turns</b> ??????????????????</p>
+          <p><b>reverse_move_rate</b> ?????????????????????????????????</p>
+          <p><b>strategic_interval</b> ????????????????????LLM ??????????????</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const bot0 = document.getElementById("bot0");
+    const bot1 = document.getElementById("bot1");
+    const games = document.getElementById("games");
+    const seed = document.getElementById("seed");
+    const width = document.getElementById("width");
+    const height = document.getElementById("height");
+    const maxTurns = document.getElementById("maxTurns");
+    const interval = document.getElementById("interval");
+    const form = document.getElementById("controls");
+    const runButton = document.getElementById("run");
+    const statusEl = document.getElementById("status");
+    const metricsEl = document.getElementById("metrics");
+    const barsEl = document.getElementById("bars");
+    const rowsEl = document.getElementById("rows");
+
+    function percent(value) {
+      return `${Math.round(Number(value || 0) * 1000) / 10}%`;
+    }
+
+    function metric(label, value) {
+      const node = document.createElement("div");
+      node.className = "metric";
+      node.innerHTML = `<div class="label">${label}</div><div class="value">${value}</div>`;
+      return node;
+    }
+
+    function bar(label, value, className = "") {
+      const node = document.createElement("div");
+      node.className = "bar";
+      const pct = Math.max(0, Math.min(100, Number(value || 0) * 100));
+      node.innerHTML = `
+        <div>${label}</div>
+        <div class="track"><div class="fill ${className}" style="width:${pct}%"></div></div>
+        <div>${percent(value)}</div>
+      `;
+      return node;
+    }
+
+    function render(summary) {
+      metricsEl.innerHTML = "";
+      barsEl.innerHTML = "";
+      rowsEl.innerHTML = "";
+
+      metricsEl.append(
+        metric("??", summary.matches),
+        metric("???", percent(summary.finished_rate)),
+        metric("?? Turn", summary.avg_turns),
+        metric("??", `${summary.elapsed_seconds}s`),
+        metric("????", summary.avg_moves_per_half_turn),
+        metric("????", percent(summary.avg_reverse_move_rate)),
+        metric("???", percent(summary.avg_zero_half_turn_rate)),
+        metric("????", summary.dominance_lag_turns)
+      );
+
+      barsEl.append(
+        bar(`P0 ${summary.bots[0]}`, summary.win_rates[0]),
+        bar(`P1 ${summary.bots[1]}`, summary.win_rates[1], "p1")
+      );
+
+      for (const result of summary.results || []) {
+        const tr = document.createElement("tr");
+        const winner = result.winner === null || result.winner === undefined ? "draw" : `P${result.winner}`;
+        const reverseTotal = Object.values(result.reverse_moves || {}).reduce((a, b) => a + Number(b || 0), 0);
+        const moveTotal = Object.values(result.total_moves || {}).reduce((a, b) => a + Number(b || 0), 0);
+        const zeroTotal = Object.values(result.zero_half_turns || {}).reduce((a, b) => a + Number(b || 0), 0);
+        const activeTotal = Object.values(result.active_half_turns || {}).reduce((a, b) => a + Number(b || 0), 0);
+        const reverse = moveTotal ? reverseTotal / moveTotal : 0;
+        const zero = activeTotal ? zeroTotal / activeTotal : 0;
+        tr.innerHTML = `
+          <td>${result.seed}</td>
+          <td>${winner}</td>
+          <td>${result.turns}</td>
+          <td>${result.finished ? "yes" : "no"}</td>
+          <td>${percent(reverse)}</td>
+          <td>${percent(zero)}</td>
+          <td>${result.dominance ? result.dominance.age_turns : 0}</td>
+        `;
+        rowsEl.appendChild(tr);
+      }
+    }
+
+    async function loadOptions() {
+      const response = await fetch("/api/options");
+      const data = await response.json();
+      for (const select of [bot0, bot1]) {
+        select.innerHTML = "";
+        for (const spec of data.bots || []) {
+          const option = document.createElement("option");
+          option.value = spec;
+          option.textContent = spec;
+          select.appendChild(option);
+        }
+      }
+      bot0.value = "heuristic:baseline";
+      bot1.value = "random";
+    }
+
+    async function evaluate() {
+      const params = new URLSearchParams({
+        bot0: bot0.value,
+        bot1: bot1.value,
+        games: games.value,
+        seed: seed.value,
+        width: width.value,
+        height: height.value,
+        max_turns: maxTurns.value,
+        strategic_interval: interval.value
+      });
+      runButton.disabled = true;
+      statusEl.textContent = "running...";
+      try {
+        const response = await fetch(`/api/evaluate?${params}`);
+        const data = await response.json();
+        render(data);
+        statusEl.textContent = `done ? ${data.elapsed_seconds}s`;
+      } catch (error) {
+        statusEl.textContent = `error ? ${error}`;
+      } finally {
+        runButton.disabled = false;
+      }
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      evaluate();
+    });
+
+    loadOptions().then(evaluate);
+  </script>
+</body>
+</html>
