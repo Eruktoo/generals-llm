@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from arena import ArenaConfig, run_batch
+from arena import ArenaConfig, ArenaRunner, build_bot, run_batch
 
 
 PORT = int(os.environ.get("GENERALS_ARENA_PORT", "8910"))
@@ -62,6 +62,12 @@ class ArenaHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/evaluate":
             self._send_json(self._evaluate(parse_qs(parsed.query)))
             return
+        if parsed.path == "/api/replay":
+            self._send_json(self._replay(parse_qs(parsed.query)))
+            return
+        if parsed.path == "/replay":
+            self.path = "/replay.html"
+            return super().do_GET()
         if parsed.path in ("", "/"):
             self.path = "/index.html"
         super().do_GET()
@@ -99,6 +105,35 @@ class ArenaHandler(SimpleHTTPRequestHandler):
         }
         summary["elapsed_seconds"] = round(time.perf_counter() - start, 3)
         return summary
+
+    def _replay(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        start = time.perf_counter()
+        seed = self._int_arg(query, "seed", 1, 0, 2_000_000_000)
+        width = self._int_arg(query, "width", 12, 6, 24)
+        height = self._int_arg(query, "height", 12, 6, 24)
+        max_turns = self._int_arg(query, "max_turns", 400, 50, 1500)
+        strategic_interval = self._int_arg(query, "strategic_interval", 1, 1, 60)
+        bot0 = self._choice_arg(query, "bot0", "heuristic:baseline")
+        bot1 = self._choice_arg(query, "bot1", "random")
+        cfg = ArenaConfig(
+            width=width,
+            height=height,
+            max_turns=max_turns,
+            strategic_interval=strategic_interval,
+        )
+        bots = [
+            build_bot(bot0, 0, strategic_interval),
+            build_bot(bot1, 1, strategic_interval),
+        ]
+        replay = ArenaRunner(bots, cfg).replay(seed)
+        replay["config"] = {
+            **replay["config"],
+            "seed": seed,
+            "bot0": bot0,
+            "bot1": bot1,
+        }
+        replay["elapsed_seconds"] = round(time.perf_counter() - start, 3)
+        return replay
 
     def _int_arg(
         self,

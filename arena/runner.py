@@ -6,7 +6,7 @@ from typing import Any
 
 from engine.board import Board
 from engine.game import Game
-from engine.types import Move, PlayerState
+from engine.types import Move, PlayerState, Tile
 
 from .bots import ArenaBot, build_bot
 
@@ -59,14 +59,7 @@ class ArenaRunner:
         self.config = config or ArenaConfig()
 
     def run(self, seed: int) -> MatchResult:
-        players = [
-            PlayerState(index=idx, alive=True, name=self.bots[idx].name)
-            for idx in range(2)
-        ]
-        board = Board.generate_map(self.config.width, self.config.height, 2, seed=seed)
-        game = Game(board, players)
-        for bot in self.bots:
-            bot.reset(seed)
+        game = self._new_game(seed)
 
         half_turn = 0
         total_moves = {idx: 0 for idx in range(2)}
@@ -115,6 +108,66 @@ class ArenaRunner:
             final_rankings=game.get_rankings(),
             dominance=dominance.summary(game.turn),
         )
+
+    def replay(self, seed: int) -> dict[str, Any]:
+        game = self._new_game(seed)
+        half_turn = 0
+        dominance = DominanceTracker()
+        frames = [
+            _frame_snapshot(game, seed, half_turn, [bot.name for bot in self.bots], {})
+        ]
+
+        while not game.is_finished() and game.turn < self.config.max_turns:
+            moves_by_player: dict[int, list[Move]] = {}
+            for bot in self.bots:
+                if not game.alive[bot.player_idx]:
+                    continue
+                view = game.get_player_view(bot.player_idx)
+                moves_by_player[bot.player_idx] = bot.moves(view, half_turn)
+
+            game.step(moves_by_player)
+            half_turn += 1
+            dominance.observe(game.turn, game.get_rankings())
+            frames.append(
+                _frame_snapshot(
+                    game,
+                    seed,
+                    half_turn,
+                    [bot.name for bot in self.bots],
+                    moves_by_player,
+                )
+            )
+
+        winner = _winner(game)
+        finished = game.is_finished()
+        return {
+            "seed": seed,
+            "winner": winner,
+            "finished": finished,
+            "terminal_reason": "general_captured" if finished else "max_turns",
+            "turns": game.turn,
+            "half_turns": half_turn,
+            "bot_names": [bot.name for bot in self.bots],
+            "config": {
+                "width": self.config.width,
+                "height": self.config.height,
+                "max_turns": self.config.max_turns,
+                "strategic_interval": self.config.strategic_interval,
+            },
+            "dominance": dominance.summary(game.turn),
+            "frames": frames,
+        }
+
+    def _new_game(self, seed: int) -> Game:
+        players = [
+            PlayerState(index=idx, alive=True, name=self.bots[idx].name)
+            for idx in range(2)
+        ]
+        board = Board.generate_map(self.config.width, self.config.height, 2, seed=seed)
+        game = Game(board, players)
+        for bot in self.bots:
+            bot.reset(seed)
+        return game
 
 
 @dataclass
@@ -199,6 +252,69 @@ def summarize_results(results: list[MatchResult]) -> dict[str, Any]:
         ) if any(result.dominance["first_turn"] is not None for result in results) else 0,
         "results": [result.__dict__ for result in results],
     }
+
+
+def _frame_snapshot(
+    game: Game,
+    seed: int,
+    half_turn: int,
+    bot_names: list[str],
+    moves_by_player: dict[int, list[Move]],
+) -> dict[str, Any]:
+    rankings = game.get_rankings()
+    return {
+        "seed": seed,
+        "turn": game.turn,
+        "phase": game.phase,
+        "half_turn": half_turn,
+        "width": game.board.width,
+        "height": game.board.height,
+        "tiles": [
+            [_serialize_tile(tile) for tile in row]
+            for row in game.board.tiles
+        ],
+        "rankings": [
+            {
+                **row,
+                "name": bot_names[row["player"]],
+                "cities": _count_player_cities(game, row["player"]),
+            }
+            for row in rankings
+        ],
+        "finished": game.is_finished(),
+        "winner": _winner(game),
+        "moves": {
+            str(player): [_serialize_move(move) for move in moves]
+            for player, moves in moves_by_player.items()
+        },
+    }
+
+
+def _serialize_tile(tile: Tile) -> dict[str, Any]:
+    return {
+        "type": tile.type.name,
+        "occupier": tile.occupier,
+        "army": tile.army,
+    }
+
+
+def _serialize_move(move: Move) -> dict[str, Any]:
+    return {
+        "from_x": move.from_x,
+        "from_y": move.from_y,
+        "to_x": move.to_x,
+        "to_y": move.to_y,
+        "take_half": move.take_half,
+    }
+
+
+def _count_player_cities(game: Game, player_idx: int) -> int:
+    return sum(
+        1
+        for row in game.board.tiles
+        for tile in row
+        if tile.occupier == player_idx and tile.type.name == "CITY"
+    )
 
 
 def _count_reverse_moves(

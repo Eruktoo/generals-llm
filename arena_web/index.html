@@ -294,6 +294,7 @@
                 <th>Reverse</th>
                 <th>Zero</th>
                 <th>Dominance Lag</th>
+                <th>Replay</th>
               </tr>
             </thead>
             <tbody id="rows"></tbody>
@@ -387,6 +388,15 @@
         const activeTotal = Object.values(result.active_half_turns || {}).reduce((a, b) => a + Number(b || 0), 0);
         const reverse = moveTotal ? reverseTotal / moveTotal : 0;
         const zero = activeTotal ? zeroTotal / activeTotal : 0;
+        const replayParams = new URLSearchParams({
+          seed: result.seed,
+          bot0: summary.config.bot0,
+          bot1: summary.config.bot1,
+          width: summary.config.width,
+          height: summary.config.height,
+          max_turns: summary.config.max_turns,
+          strategic_interval: summary.config.strategic_interval
+        });
         tr.innerHTML = `
           <td>${result.seed}</td>
           <td>${winner}</td>
@@ -395,6 +405,7 @@
           <td>${percent(reverse)}</td>
           <td>${percent(zero)}</td>
           <td>${result.dominance ? result.dominance.age_turns : 0}</td>
+          <td><a href="/replay?${replayParams}" target="_blank">open</a></td>
         `;
         rowsEl.appendChild(tr);
       }

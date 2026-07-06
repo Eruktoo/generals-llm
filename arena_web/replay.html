@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Generals 1v1 Replay</title>
+  <style>
+    :root {
+      --bg: #15181f;
+      --panel: #20252e;
+      --panel-strong: #2a303b;
+      --line: #394150;
+      --text: #f4f7fb;
+      --muted: #9aa8ba;
+      --accent: #f2c14e;
+      --blue: #4a90d9;
+      --red: #e4574f;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 14px;
+      padding: 18px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    a { color: var(--accent); }
+
+    .sub,
+    .status {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+    }
+
+    .status {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      text-align: right;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: auto auto auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+    }
+
+    button,
+    select,
+    input {
+      height: 36px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #12161d;
+      color: var(--text);
+      padding: 0 10px;
+      font: inherit;
+    }
+
+    button {
+      min-width: 42px;
+      cursor: pointer;
+      background: var(--panel-strong);
+      font-weight: 800;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #15181f;
+      border-color: var(--accent);
+      min-width: 84px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      padding: 0;
+      accent-color: var(--accent);
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(480px, 1fr) minmax(320px, 420px);
+      gap: 14px;
+      min-height: 0;
+    }
+
+    section {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 14px;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .board-wrap {
+      display: grid;
+      place-items: center;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    canvas {
+      width: min(100%, 78vh);
+      aspect-ratio: 1 / 1;
+      border: 1px solid var(--line);
+      background: #10141a;
+      border-radius: 6px;
+    }
+
+    .side {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 12px;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      border-radius: 8px;
+      padding: 10px;
+      min-height: 74px;
+    }
+
+    .stat .label,
+    .move-list .muted {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .stat .value {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 21px;
+      font-weight: 800;
+      margin-top: 6px;
+      overflow-wrap: anywhere;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 8px 7px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      background: #191e26;
+    }
+
+    .move-list {
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #191e26;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .move-p0 { color: var(--blue); }
+    .move-p1 { color: var(--red); }
+
+    @media (max-width: 980px) {
+      .toolbar,
+      main,
+      .stats {
+        grid-template-columns: 1fr;
+      }
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .status {
+        text-align: left;
+      }
+      canvas {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <h1>Generals 1v1 Replay</h1>
+        <div id="subtitle" class="sub">loading...</div>
+      </div>
+      <div class="status">
+        <a href="/">Arena</a>
+        <div id="status">loading</div>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <button id="prev" type="button">&lt;</button>
+      <button id="play" class="primary" type="button">Play</button>
+      <button id="next" type="button">&gt;</button>
+      <input id="timeline" type="range" min="0" max="0" value="0">
+      <select id="speed">
+        <option value="900">1x</option>
+        <option value="450" selected>2x</option>
+        <option value="180">5x</option>
+        <option value="90">10x</option>
+      </select>
+    </div>
+
+    <main>
+      <section class="board-wrap">
+        <canvas id="board"></canvas>
+      </section>
+
+      <section class="side">
+        <div>
+          <h2>Frame</h2>
+          <div class="stats">
+            <div class="stat"><div class="label">Turn</div><div id="turn" class="value">-</div></div>
+            <div class="stat"><div class="label">Winner</div><div id="winner" class="value">-</div></div>
+            <div class="stat"><div class="label">Half turn</div><div id="halfTurn" class="value">-</div></div>
+            <div class="stat"><div class="label">Phase</div><div id="phase" class="value">-</div></div>
+          </div>
+        </div>
+
+        <div>
+          <h2>Players</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>P</th>
+                <th>Bot</th>
+                <th>Army</th>
+                <th>Tiles</th>
+                <th>Cities</th>
+              </tr>
+            </thead>
+            <tbody id="rankings"></tbody>
+          </table>
+        </div>
+
+        <div>
+          <h2>Moves</h2>
+          <div id="moves" class="move-list"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("board");
+    const ctx = canvas.getContext("2d");
+    const subtitleEl = document.getElementById("subtitle");
+    const statusEl = document.getElementById("status");
+    const prevEl = document.getElementById("prev");
+    const playEl = document.getElementById("play");
+    const nextEl = document.getElementById("next");
+    const timelineEl = document.getElementById("timeline");
+    const speedEl = document.getElementById("speed");
+    const turnEl = document.getElementById("turn");
+    const winnerEl = document.getElementById("winner");
+    const halfTurnEl = document.getElementById("halfTurn");
+    const phaseEl = document.getElementById("phase");
+    const rankingsEl = document.getElementById("rankings");
+    const movesEl = document.getElementById("moves");
+
+    let replay = null;
+    let frameIndex = 0;
+    let timer = null;
+
+    function playerLabel(player) {
+      return player === null || player === undefined ? "-" : `P${player}`;
+    }
+
+    function fitCanvas(frame) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const size = Math.max(240, Math.floor(Math.min(rect.width, rect.height || rect.width)));
+      canvas.width = Math.floor(size * dpr);
+      canvas.height = Math.floor(size * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { size, cell: size / Math.max(frame.width, frame.height) };
+    }
+
+    function tileColor(tile) {
+      if (tile.type === "MOUNTAIN") return "#596171";
+      if (tile.occupier === 0) return "#2f78b7";
+      if (tile.occupier === 1) return "#b74742";
+      if (tile.type === "CITY") return "#9f8541";
+      return "#273245";
+    }
+
+    function drawFrame() {
+      if (!replay) return;
+      const frame = replay.frames[frameIndex];
+      const dims = fitCanvas(frame);
+      const boardW = frame.width * dims.cell;
+      const boardH = frame.height * dims.cell;
+      const offsetX = (dims.size - boardW) / 2;
+      const offsetY = (dims.size - boardH) / 2;
+
+      ctx.clearRect(0, 0, dims.size, dims.size);
+      ctx.fillStyle = "#10141a";
+      ctx.fillRect(0, 0, dims.size, dims.size);
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `${Math.max(10, Math.floor(dims.cell * 0.34))}px Consolas, monospace`;
+
+      for (let y = 0; y < frame.height; y += 1) {
+        for (let x = 0; x < frame.width; x += 1) {
+          const tile = frame.tiles[y][x];
+          const px = offsetX + x * dims.cell;
+          const py = offsetY + y * dims.cell;
+          ctx.fillStyle = tileColor(tile);
+          ctx.fillRect(px, py, dims.cell, dims.cell);
+          ctx.strokeStyle = "#15181f";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(px, py, dims.cell, dims.cell);
+
+          if (tile.type === "GENERAL" || tile.type === "CITY") {
+            ctx.fillStyle = tile.type === "GENERAL" ? "#f6e27f" : "#d9b85a";
+            ctx.beginPath();
+            ctx.arc(px + dims.cell * 0.22, py + dims.cell * 0.22, Math.max(3, dims.cell * 0.11), 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (tile.army > 0) {
+            ctx.fillStyle = "#f4f7fb";
+            ctx.fillText(String(tile.army), px + dims.cell / 2, py + dims.cell / 2);
+          }
+        }
+      }
+
+      drawMoves(frame, offsetX, offsetY, dims.cell);
+      renderDetails(frame);
+    }
+
+    function drawMoves(frame, offsetX, offsetY, cell) {
+      const allMoves = [];
+      for (const [player, moves] of Object.entries(frame.moves || {})) {
+        for (const move of moves) allMoves.push({ player: Number(player), ...move });
+      }
+      ctx.lineWidth = Math.max(2, cell * 0.08);
+      for (const move of allMoves) {
+        const x1 = offsetX + (move.from_x + 0.5) * cell;
+        const y1 = offsetY + (move.from_y + 0.5) * cell;
+        const x2 = offsetX + (move.to_x + 0.5) * cell;
+        const y2 = offsetY + (move.to_y + 0.5) * cell;
+        ctx.strokeStyle = move.player === 0 ? "#9bd0ff" : "#ffaaa6";
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.globalAlpha = 0.86;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const head = Math.max(5, cell * 0.18);
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - head * Math.cos(angle - 0.55), y2 - head * Math.sin(angle - 0.55));
+        ctx.lineTo(x2 - head * Math.cos(angle + 0.55), y2 - head * Math.sin(angle + 0.55));
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function renderDetails(frame) {
+      timelineEl.value = String(frameIndex);
+      turnEl.textContent = String(frame.turn);
+      halfTurnEl.textContent = `${frame.half_turn}/${replay.half_turns}`;
+      phaseEl.textContent = String(frame.phase);
+      winnerEl.textContent = replay.finished ? playerLabel(replay.winner) : "open";
+      statusEl.textContent = `${frameIndex + 1}/${replay.frames.length}`;
+
+      rankingsEl.innerHTML = "";
+      for (const row of frame.rankings || []) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${playerLabel(row.player)}</td>
+          <td>${row.name}</td>
+          <td>${row.army}</td>
+          <td>${row.tiles}</td>
+          <td>${row.cities || 0}</td>
+        `;
+        rankingsEl.appendChild(tr);
+      }
+
+      const lines = [];
+      for (const [player, moves] of Object.entries(frame.moves || {})) {
+        if (!moves.length) {
+          lines.push(`<div class="move-p${player}">P${player}: no move</div>`);
+        }
+        for (const move of moves) {
+          const half = move.take_half ? " half" : "";
+          lines.push(`<div class="move-p${player}">P${player}: (${move.from_x},${move.from_y}) -&gt; (${move.to_x},${move.to_y})${half}</div>`);
+        }
+      }
+      movesEl.innerHTML = lines.length ? lines.join("") : '<span class="muted">initial frame</span>';
+    }
+
+    function goTo(index) {
+      if (!replay) return;
+      frameIndex = Math.max(0, Math.min(replay.frames.length - 1, index));
+      drawFrame();
+    }
+
+    function stop() {
+      if (timer) window.clearInterval(timer);
+      timer = null;
+      playEl.textContent = "Play";
+    }
+
+    function togglePlay() {
+      if (timer) {
+        stop();
+        return;
+      }
+      playEl.textContent = "Pause";
+      timer = window.setInterval(() => {
+        if (!replay || frameIndex >= replay.frames.length - 1) {
+          stop();
+          return;
+        }
+        goTo(frameIndex + 1);
+      }, Number(speedEl.value));
+    }
+
+    async function loadReplay() {
+      const response = await fetch(`/api/replay${window.location.search}`);
+      replay = await response.json();
+      timelineEl.max = String(Math.max(0, replay.frames.length - 1));
+      subtitleEl.textContent = `seed ${replay.seed} | ${replay.config.bot0} vs ${replay.config.bot1} | ${replay.config.width}x${replay.config.height}`;
+      statusEl.textContent = `loaded ${replay.elapsed_seconds}s`;
+      goTo(0);
+    }
+
+    prevEl.addEventListener("click", () => goTo(frameIndex - 1));
+    nextEl.addEventListener("click", () => goTo(frameIndex + 1));
+    playEl.addEventListener("click", togglePlay);
+    timelineEl.addEventListener("input", () => goTo(Number(timelineEl.value)));
+    speedEl.addEventListener("change", () => {
+      if (timer) {
+        stop();
+        togglePlay();
+      }
+    });
+    window.addEventListener("resize", drawFrame);
+
+    loadReplay().catch((error) => {
+      statusEl.textContent = `error - ${error}`;
+    });
+  </script>
+</body>
+</html>
