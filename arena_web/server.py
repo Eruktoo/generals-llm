@@ -34,6 +34,15 @@ class ArenaHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
+    def guess_type(self, path: str) -> str:
+        if path.endswith(".html"):
+            return "text/html; charset=utf-8"
+        if path.endswith(".js"):
+            return "application/javascript; charset=utf-8"
+        if path.endswith(".css"):
+            return "text/css; charset=utf-8"
+        return super().guess_type(path)
+
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
