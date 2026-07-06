@@ -245,7 +245,7 @@
     <header>
       <div>
         <h1>Generals 1v1 Arena</h1>
-        <div class="sub">?? seed ??????????????? bot ???????</div>
+        <div class="sub">&#22266;&#23450; seed &#27744;&#25209;&#37327;&#35780;&#27979;&#65292;&#29992;&#32988;&#29575;&#21644;&#36136;&#37327;&#25351;&#26631;&#30475; bot &#26159;&#21542;&#30495;&#30340;&#21464;&#24378;&#12290;</div>
       </div>
       <div id="status" class="status">idle</div>
     </header>
@@ -257,22 +257,22 @@
       <label>P1
         <select id="bot1"></select>
       </label>
-      <label>??
+      <label>&#23616;&#25968;
         <input id="games" type="number" min="1" max="100" value="10">
       </label>
       <label>Seed
         <input id="seed" type="number" min="0" value="1">
       </label>
-      <label>?
+      <label>&#23485;
         <input id="width" type="number" min="6" max="24" value="12">
       </label>
-      <label>?
+      <label>&#39640;
         <input id="height" type="number" min="6" max="24" value="12">
       </label>
-      <label>Turn ??
+      <label>Turn &#19978;&#38480;
         <input id="maxTurns" type="number" min="50" max="1500" value="400">
       </label>
-      <label>????
+      <label>&#31574;&#30053;&#38388;&#38548;
         <input id="interval" type="number" min="1" max="60" value="1">
       </label>
       <button id="run" type="submit">Run</button>
@@ -280,7 +280,7 @@
 
     <main>
       <section>
-        <h2>??</h2>
+        <h2>&#24635;&#35272;</h2>
         <div id="metrics" class="metrics"></div>
         <div id="bars" class="bars"></div>
         <div class="table-wrap">
@@ -302,12 +302,12 @@
       </section>
 
       <section>
-        <h2>??</h2>
+        <h2>&#35835;&#27861;</h2>
         <div class="note">
-          <p><b>finished_rate</b> ?????????????????</p>
-          <p><b>dominance_lag_turns</b> ??????????????????</p>
-          <p><b>reverse_move_rate</b> ?????????????????????????????????</p>
-          <p><b>strategic_interval</b> ????????????????????LLM ??????????????</p>
+          <p><b>finished_rate</b> &#20302;&#65292;&#35828;&#26126;&#32463;&#24120;&#25302;&#21040;&#19978;&#38480;&#65292;&#27531;&#23616;&#36716;&#21270;&#24369;&#12290;</p>
+          <p><b>dominance_lag_turns</b> &#39640;&#65292;&#35828;&#26126;&#20248;&#21183;&#20986;&#29616;&#21518;&#24456;&#20037;&#27809;&#26377;&#32467;&#26463;&#27604;&#36187;&#12290;</p>
+          <p><b>reverse_move_rate</b> &#39640;&#65292;&#19981;&#19968;&#23450;&#31561;&#20110;&#38169;&#35823;&#65292;&#20294;&#36890;&#24120;&#24847;&#21619;&#30528;&#30446;&#26631;&#19981;&#31283;&#23450;&#25110;&#25191;&#34892;&#22120;&#22312;&#36793;&#30028;&#21453;&#22797;&#25644;&#36816;&#12290;</p>
+          <p><b>strategic_interval</b> &#21487;&#20197;&#27169;&#25311;&#20302;&#39057;&#39640;&#23618;&#20915;&#31574;&#65306;&#25968;&#20540;&#36234;&#22823;&#65292;&#36234;&#25509;&#36817;&#8220;LLM &#20598;&#23572;&#32479;&#25324;&#65292;&#25191;&#34892;&#22120;&#25345;&#32493;&#34892;&#21160;&#8221;&#12290;</p>
         </div>
       </section>
     </main>
@@ -358,14 +358,14 @@
       rowsEl.innerHTML = "";
 
       metricsEl.append(
-        metric("??", summary.matches),
-        metric("???", percent(summary.finished_rate)),
-        metric("?? Turn", summary.avg_turns),
-        metric("??", `${summary.elapsed_seconds}s`),
-        metric("????", summary.avg_moves_per_half_turn),
-        metric("????", percent(summary.avg_reverse_move_rate)),
-        metric("???", percent(summary.avg_zero_half_turn_rate)),
-        metric("????", summary.dominance_lag_turns)
+        metric("&#23616;&#25968;", summary.matches),
+        metric("&#23436;&#25104;&#29575;", percent(summary.finished_rate)),
+        metric("&#24179;&#22343; Turn", summary.avg_turns),
+        metric("&#32791;&#26102;", `${summary.elapsed_seconds}s`),
+        metric("&#21160;&#20316;&#23494;&#24230;", summary.avg_moves_per_half_turn),
+        metric("&#21453;&#21521;&#37325;&#22797;", percent(summary.avg_reverse_move_rate)),
+        metric("&#31354;&#36716;&#29575;", percent(summary.avg_zero_half_turn_rate)),
+        metric("&#20248;&#21183;&#25302;&#24310;", summary.dominance_lag_turns)
       );
 
       barsEl.append(
@@ -428,9 +428,9 @@
         const response = await fetch(`/api/evaluate?${params}`);
         const data = await response.json();
         render(data);
-        statusEl.textContent = `done ? ${data.elapsed_seconds}s`;
+        statusEl.textContent = `done - ${data.elapsed_seconds}s`;
       } catch (error) {
-        statusEl.textContent = `error ? ${error}`;
+        statusEl.textContent = `error - ${error}`;
       } finally {
         runButton.disabled = false;
       }
